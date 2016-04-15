@@ -25,25 +25,6 @@ def convertTime2Sec(time):
     secOfDay = float(HHMMSS[0])*3600 + float(HHMMSS[1])*60 + float(HHMMSS[2])
     return secOfDay
 
-def getAnnoLut(iNansat,iPol,iProd):
-    if not (iProd=='calibration' or iProd=='noise'):
-        raise ValueError('iProd must be calibration or noise')
-    fileIndexDict = { 'HH':u'001', 'HV':u'002' }
-    productDict = { 'calibration':'sigmaNought', 'noise':'noiseLut' }
-    xmldocElem = parse( glob.glob(\
-        iNansat.fileName + '/annotation/calibration/' + iProd \
-        + '*' + fileIndexDict[iPol] + '.xml' )[0] )
-    oLUT = { 'pixel':[], 'line':[], 'value':[] }
-    vectorList = getElem(xmldocElem,[iProd+'VectorList'])
-    for iVector in vectorList.getElementsByTagName(iProd+'Vector'):
-        oLUT['pixel'].append(
-            map(int, getValue(iVector,['pixel']).split()))
-        oLUT['line'].append(int(getValue(iVector,['line'])))
-        oLUT['value'].append(
-            map(float, getValue(iVector,[productDict[iProd]]).split()))
-    return oLUT
-
-
 def restoreNoiseLUT(iLUT):
     swPts = [0, 3020, 4930, 7000, 8870, 10400]    # nominal subswath boundaries
     epLen = 100    # extrapolation length
@@ -104,6 +85,23 @@ class Sentinel1Image(Nansat):
                                          'AAEP_V20150722.npz')
     azimuthAntennaElementPattern = np.load(aaepFileName)
 
+    def getAnnoLut(self, iPol, iProd):
+        ''' Read calibration LUT from XML for a given polarization'''
+        if iProd not in ['calibration', 'noise']:
+            raise ValueError('iProd must be calibration or noise')
+        fileIndexDict = { 'HH':u'001', 'HV':u'002' }
+        productDict = { 'calibration':'sigmaNought', 'noise':'noiseLut' }
+        xmldocElem = parse(glob.glob('%s/annotation/calibration/%s-*-%s-*.xml' % (
+                            self.fileName, iProd, iPol.lower()))[0])
+        oLUT = { 'pixel':[], 'line':[], 'value':[] }
+        vectorList = getElem(xmldocElem,[iProd+'VectorList'])
+        for iVector in vectorList.getElementsByTagName(iProd+'Vector'):
+            oLUT['pixel'].append(map(int, getValue(iVector,['pixel']).split()))
+            oLUT['line'].append(int(getValue(iVector,['line'])))
+            oLUT['value'].append(map(float,
+                            getValue(iVector,[productDict[iProd]]).split()))
+        return oLUT
+
     def __getitem__(self, bandID):
 
         band = self.get_GDALRasterBand(bandID)
@@ -126,15 +124,13 @@ class Sentinel1Image(Nansat):
                                 'EW3': 2.366195855 , 'EW4': 2.512694636, \
                                 'EW5': 2.122855427                         }
 
-        if iPol=='HH':
-            ANNO_HEADER_XML = glob.glob(iSAFEimg+'/annotation/*001.xml')[0]
-        elif iPol=='HV':
-            ANNO_HEADER_XML = glob.glob(iSAFEimg+'/annotation/*002.xml')[0]
+        ANNO_HEADER_XML = glob.glob('%s/annotation/s1a*-%s-*.xml' % (
+                                                self.fileName,
+                                                iPol.lower()))[0]
         xmldocElem = parse(ANNO_HEADER_XML)
-
         startTime = convertTime2Sec(getValue(xmldocElem,['startTime']))
-        azimuthTimeInterval = float(
-                            getValue(xmldocElem, ['azimuthTimeInterval']))
+        azimuthTimeInterval = float(getValue(xmldocElem,
+                                             ['azimuthTimeInterval']))
         numberOfSamples = int(getValue(xmldocElem, ['numberOfSamples']))
         numberOfLines = int(getValue(xmldocElem, ['numberOfLines']))
 
@@ -197,7 +193,7 @@ class Sentinel1Image(Nansat):
         zdtBias = (replicaTime - antennaPatternTime['EW1'][0]
                   + np.mean(np.diff(antennaPatternTime['EW1'])) / 2)
 
-        noiseLut = getAnnoLut(self, iPol, 'noise')
+        noiseLut = self.getAnnoLut(iPol, 'noise')
         noiseLutInterp = restoreNoiseLUT(noiseLut)
 
         GRD = {}
@@ -277,7 +273,7 @@ class Sentinel1Image(Nansat):
                         * 10**(ds[iAziLine]/10.))
 
 
-        sigmaNought = getAnnoLut(self, iPol, 'calibration')
+        sigmaNought = self.getAnnoLut(iPol, 'calibration')
         sampleCoord = np.array( ( np.dot( np.array(sigmaNought['line'])[np.newaxis].T,
                                                    np.ones((1, len(sigmaNought['pixel'][0])))).flatten(),
                                                    np.stack(sigmaNought['pixel']).flatten() ) ).transpose()
