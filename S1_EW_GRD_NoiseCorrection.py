@@ -52,15 +52,18 @@ def restoreNoiseLUT(iLUT):
         pixels = np.stack(ptsPixel['EW'+str(iSW+1)])
         lines = np.stack(ptsLine['EW'+str(iSW+1)])
         values = np.stack(ptsValue['EW'+str(iSW+1)])
-        gridSampleCoords = \
-            np.array( (lines.flatten(),pixels.flatten()) ).transpose()
-        gridExportPixels, gridExportLines = \
-            np.meshgrid( range(np.min(pixels),np.max(pixels)+1),\
-                         range(np.min(lines),np.max(lines)+1) )
+        gridSampleCoords = (np.array( (lines.flatten(),
+                                       pixels.flatten()) ).transpose())
+        gridExportPixels, gridExportLines = np.meshgrid(range(np.min(pixels),
+                                                               np.max(pixels)+1),
+                                                         range(np.min(lines),
+                                                               np.max(lines)+1))
         oLUT['pixel'].append(pixels[0])
         oLUT['EW'+str(iSW+1)] = \
-            griddata( gridSampleCoords,values.flatten(),\
-                      (gridExportLines,gridExportPixels), method='linear' )
+            griddata(gridSampleCoords,
+                     values.flatten(),
+                     (gridExportLines,gridExportPixels),
+                     method='linear' )
     return oLUT
 
 
@@ -89,7 +92,6 @@ class Sentinel1Image(Nansat):
         ''' Read calibration LUT from XML for a given polarization'''
         if iProd not in ['calibration', 'noise']:
             raise ValueError('iProd must be calibration or noise')
-        fileIndexDict = { 'HH':u'001', 'HV':u'002' }
         productDict = { 'calibration':'sigmaNought', 'noise':'noiseLut' }
         xmldocElem = parse(glob.glob('%s/annotation/calibration/%s-*-%s-*.xml' % (
                             self.fileName, iProd, iPol.lower()))[0])
