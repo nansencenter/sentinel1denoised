@@ -32,13 +32,13 @@ def restoreNoiseLUT(iLUT):
     ptsLine = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
     ptsValue = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
     oLUT = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[], 'pixel':[] }
-    for iVec,iLine in enumerate(iLUT['line']):
+    for iVec, iLine in enumerate(iLUT['line']):
         vecPixel = iLUT['pixel'][iVec]
         vecValue = iLUT['value'][iVec]
         startIndex = np.insert(np.where(np.diff(vecPixel)==1)[0]+1,0,0)
-        startIndex = startIndex[np.append(np.diff(startIndex)!=1,True)]
-        endIndex = np.append(np.where(np.diff(vecPixel)==1)[0],len(vecPixel)-1)
-        endIndex = endIndex[np.append(np.diff(endIndex)!=1,True)]
+        startIndex = startIndex[np.append(np.diff(startIndex)!=1, True)]
+        endIndex = np.append(np.where(np.diff(vecPixel)==1)[0], len(vecPixel)-1)
+        endIndex = endIndex[np.append(np.diff(endIndex)!=1, True)]
         for iSW in range(5):
             xPts = vecPixel[startIndex[iSW]:endIndex[iSW]+1]
             yPts = vecValue[startIndex[iSW]:endIndex[iSW]+1]
@@ -108,9 +108,8 @@ class Sentinel1Image(Nansat):
 
         band = self.get_GDALRasterBand(bandID)
         name = band.GetMetadata().get('name', '')
-        dataArray = Nansat.__getitem__(self, bandID)
         if name not in ['sigma0_HH', 'sigma0_HV', 'sigma0HH_', 'sigma0HV_']:
-            return dataArray
+            return self[bandID]
         if name[-1]=='_':
             iPol = name[-3:-1]
         else:
