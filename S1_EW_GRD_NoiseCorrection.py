@@ -109,7 +109,7 @@ class Sentinel1Image(Nansat):
         band = self.get_GDALRasterBand(bandID)
         name = band.GetMetadata().get('name', '')
         if name not in ['sigma0_HH', 'sigma0_HV', 'sigma0HH_', 'sigma0HV_']:
-            return self[bandID]
+            return Nansat.__getitem__(self, bandID)
         if name[-1]=='_':
             iPol = name[-3:-1]
         else:
