@@ -1,11 +1,12 @@
-import numpy as np
+import os
 import glob
 import xml.etree.ElementTree as ET
-from scipy.interpolate import griddata, InterpolatedUnivariateSpline
 from xml.dom.minidom import parse, parseString
-import os
-from nansat import Nansat
 
+import numpy as np
+from scipy.interpolate import griddata, InterpolatedUnivariateSpline
+
+from nansat import Nansat
 
 def getElem(elem, tags):
     ''' Get sub-element from XML element based on tags '''
@@ -83,7 +84,6 @@ def restoreNoiseLUT(iLUT):
 
 
 class Sentinel1Image(Nansat):
-
     """
     RADIOMETRIC CALIBRATION AND NOISE REMOVAL FOR S-1 GRD PRODUCT
 
@@ -98,6 +98,11 @@ class Sentinel1Image(Nansat):
     HOW TO COMPUTE EXACT ZERO DOPPLER TIME, ZDT? THIS IS SOMEWHAT UNCLEAR YET.
     I INTRODUCED zdtBias TO ADJUST IT APPROXIMATELY.
     """
+    # set fonts for Legend
+    aaepFileName = os.path.join(os.path.dirname(
+                                         os.path.realpath(__file__)),
+                                         'AAEP_V20150722.npz')
+    azimuthAntennaElementPattern = np.load(aaepFileName)
 
     def __getitem__(self, bandID):
 
@@ -120,7 +125,6 @@ class Sentinel1Image(Nansat):
         azimuthSteeringRate = { 'EW1': 2.390895448 , 'EW2': 2.811502724, \
                                 'EW3': 2.366195855 , 'EW4': 2.512694636, \
                                 'EW5': 2.122855427                         }
-        azimuthAntennaElementPattern = np.load('AAEP_V20150722.npz')
 
         if iPol=='HH':
             ANNO_HEADER_XML = glob.glob(iSAFEimg+'/annotation/*001.xml')[0]
@@ -221,8 +225,8 @@ class Sentinel1Image(Nansat):
         for iSwathMerge in swathMergeList.getElementsByTagName('swathMerge'):
             subswathID = getValue(iSwathMerge, ['swath'])
             subswathIndex = int(subswathID[-1])-1
-            aziAntElemPat = azimuthAntennaElementPattern[subswathID]
-            aziAntElemAng = azimuthAntennaElementPattern['azimuthAngle']
+            aziAntElemPat = self.azimuthAntennaElementPattern[subswathID]
+            aziAntElemAng = self.azimuthAntennaElementPattern['azimuthAngle']
 
             kw = azimuthSteeringRate[subswathID] * np.pi / 180
 
