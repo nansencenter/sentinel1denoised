@@ -5,6 +5,7 @@ from xml.dom.minidom import parse, parseString
 
 import numpy as np
 from scipy.interpolate import griddata, InterpolatedUnivariateSpline
+from scipy.interpolate import RectBivariateSpline
 
 from nansat import Nansat
 
@@ -25,48 +26,6 @@ def convertTime2Sec(time):
     secOfDay = float(HHMMSS[0])*3600 + float(HHMMSS[1])*60 + float(HHMMSS[2])
     return secOfDay
 
-def restoreNoiseLUT(iLUT):
-    swPts = [0, 3020, 4930, 7000, 8870, 10400]    # nominal subswath boundaries
-    epLen = 100    # extrapolation length
-    ptsPixel = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
-    ptsLine = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
-    ptsValue = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
-    oLUT = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[], 'pixel':[] }
-    for iVec, iLine in enumerate(iLUT['line']):
-        vecPixel = iLUT['pixel'][iVec]
-        vecValue = iLUT['value'][iVec]
-        startIndex = np.insert(np.where(np.diff(vecPixel)==1)[0]+1,0,0)
-        startIndex = startIndex[np.append(np.diff(startIndex)!=1, True)]
-        endIndex = np.append(np.where(np.diff(vecPixel)==1)[0], len(vecPixel)-1)
-        endIndex = endIndex[np.append(np.diff(endIndex)!=1, True)]
-        for iSW in range(5):
-            xPts = vecPixel[startIndex[iSW]:endIndex[iSW]+1]
-            yPts = vecValue[startIndex[iSW]:endIndex[iSW]+1]
-            interpFtn = InterpolatedUnivariateSpline(xPts,yPts,k=3)
-            xInterp = np.array(range(swPts[iSW]-epLen,swPts[iSW+1]+epLen))
-            yInterp = interpFtn(xInterp)
-            ptsPixel['EW'+str(iSW+1)].append(xInterp)
-            ptsLine['EW'+str(iSW+1)].append(np.ones_like(xInterp)*iLine)
-            ptsValue['EW'+str(iSW+1)].append(yInterp)
-    for iSW in range(5):
-        pixels = np.stack(ptsPixel['EW'+str(iSW+1)])
-        lines = np.stack(ptsLine['EW'+str(iSW+1)])
-        values = np.stack(ptsValue['EW'+str(iSW+1)])
-        gridSampleCoords = (np.array( (lines.flatten(),
-                                       pixels.flatten()) ).transpose())
-        gridExportPixels, gridExportLines = np.meshgrid(range(np.min(pixels),
-                                                               np.max(pixels)+1),
-                                                         range(np.min(lines),
-                                                               np.max(lines)+1))
-        oLUT['pixel'].append(pixels[0])
-        oLUT['EW'+str(iSW+1)] = \
-            griddata(gridSampleCoords,
-                     values.flatten(),
-                     (gridExportLines,gridExportPixels),
-                     method='linear' )
-    return oLUT
-
-
 class Sentinel1Image(Nansat):
     """
     RADIOMETRIC CALIBRATION AND NOISE REMOVAL FOR S-1 GRD PRODUCT
@@ -82,27 +41,133 @@ class Sentinel1Image(Nansat):
     HOW TO COMPUTE EXACT ZERO DOPPLER TIME, ZDT? THIS IS SOMEWHAT UNCLEAR YET.
     I INTRODUCED zdtBias TO ADJUST IT APPROXIMATELY.
     """
-    # set fonts for Legend
-    aaepFileName = os.path.join(os.path.dirname(
-                                         os.path.realpath(__file__)),
-                                         'AAEP_V20150722.npz')
-    azimuthAntennaElementPattern = np.load(aaepFileName)
+    @property
+    def azimuthAntennaElementPattern(self):
+        ''' Read azimuthAntennaElementPattern from npy file '''
+        aaepFileName = os.path.join(
+                                os.path.dirname(os.path.realpath(__file__)),
+                                'AAEP_V20150722.npz')
+        return np.load(aaepFileName)
 
-    def getAnnoLut(self, iPol, iProd):
-        ''' Read calibration LUT from XML for a given polarization'''
+    def get_calibration_LUT(self, iPol, iProd):
+        ''' Read calibration LUT from XML for a given polarization
+        Parameters
+        ----------
+        iPol : str
+            polarisation: 'HH' or 'HV'
+        iProd : str
+            product: 'calibration' or 'noise'
+
+        Returns
+        -------
+        oLUT : dict
+            values, pixels, lines - 2D matrices
+
+        '''
         if iProd not in ['calibration', 'noise']:
             raise ValueError('iProd must be calibration or noise')
         productDict = { 'calibration':'sigmaNought', 'noise':'noiseLut' }
-        xmldocElem = parse(glob.glob('%s/annotation/calibration/%s-*-%s-*.xml' % (
-                            self.fileName, iProd, iPol.lower()))[0])
-        oLUT = { 'pixel':[], 'line':[], 'value':[] }
-        vectorList = getElem(xmldocElem,[iProd+'VectorList'])
+        calibXML = parse(glob.glob(
+                            '%s/annotation/calibration/%s-*-%s-*.xml' % (
+                                self.fileName, iProd, iPol.lower()))[0])
+
+        pixels = []
+        lines = []
+        values = []
+        vectorList = getElem(calibXML, [iProd + 'VectorList'])
         for iVector in vectorList.getElementsByTagName(iProd+'Vector'):
-            oLUT['pixel'].append(map(int, getValue(iVector,['pixel']).split()))
-            oLUT['line'].append(int(getValue(iVector,['line'])))
-            oLUT['value'].append(map(float,
-                            getValue(iVector,[productDict[iProd]]).split()))
-        return oLUT
+            pixels.append(map(int, getValue(iVector,['pixel']).split()))
+            lines.append(int(getValue(iVector,['line'])))
+            values.append(map(float, getValue(iVector,
+                                              [productDict[iProd]]).split()))
+
+        return dict(pixels = np.array(pixels),
+                    lines = np.array(lines),
+                    values = np.array(values))
+
+    def get_swath_bounds(self, iPol):
+        ''' Get list of left right top bottom edges for blocks in each swath
+
+        Parameters
+        ----------
+        iPol : polarisation: 'HH' or 'HV'
+
+        Returns
+        -------
+        swathBounds : dict
+            values of first/last line/sample in multilevel dict:
+            swathID
+                firstAzimuthLine
+                firstRangeSample
+                lastAzimuthLine
+                lastRangeSample
+        '''
+        keys = ['firstAzimuthLine', 'firstRangeSample',
+                'lastAzimuthLine', 'lastRangeSample']
+        swathMergeList = getElem(self.annotXML, ['swathMergeList'])
+        swathBounds = {}
+        for iSwathMerge in swathMergeList.getElementsByTagName('swathMerge'):
+            swathID = getValue(iSwathMerge, ['swath'])
+            swathBoundsList = getElem(iSwathMerge, ['swathBoundsList'])
+            swathBounds[swathID] = dict([(key,[]) for key in keys])
+            for iSwathBounds in swathBoundsList.getElementsByTagName('swathBounds'):
+                for key in keys:
+                    swathBounds[swathID][key].append(
+                                            int(getValue(iSwathBounds, [key])))
+        return swathBounds
+
+    def interpolate_lut(self, iLUT, bounds):
+        ''' Interpolate noise or calibration lut to single full resolution grid
+        Parameters
+        ----------
+        iLUT : dict
+            calibration LUT from self.calibration_lut
+        bounds : dict
+            boundaries of block in each swath from self.get_swath_bounds
+
+        Returns
+        -------
+            noiseLUTgrd : ndarray
+                full size noise or calibration matrices for entire image
+        '''
+        noiseLUTgrd = np.ones((self.numberOfLines, self.numberOfSamples)) * np.nan
+
+        epLen = 100    # extrapolation length
+        oLUT = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[], 'pixel':[] }
+        for iSW in range(5):
+            bound = bounds['EW'+str(iSW+1)]
+            xInterp = np.array(range(min(bound['firstRangeSample'])-epLen,
+                                     max(bound['lastRangeSample'])+epLen))
+            ptsValue = []
+            for iVec, iLine in enumerate(iLUT['lines']):
+                vecPixel = iLUT['pixels'][iVec]
+                vecValue = iLUT['values'][iVec]
+                blockIdx = np.nonzero(iLine >= bound['firstAzimuthLine'])[0][-1]
+                pix0 = bound['firstRangeSample'][blockIdx]
+                pix1 = bound['lastRangeSample'][blockIdx]
+                gpi = (vecPixel >= pix0) * (vecPixel <= pix1)
+                xPts = vecPixel[gpi]
+                yPts = vecValue[gpi]
+                interpFtn = InterpolatedUnivariateSpline(xPts, yPts, k=3)
+                yInterp = interpFtn(xInterp)
+                ptsValue.append(yInterp)
+
+            values = np.stack(ptsValue)
+            spline = RectBivariateSpline(iLUT['lines'], xInterp, values, kx=1, ky=1)
+            ewLUT = spline(range(iLUT['lines'].min(), iLUT['lines'].max()+1),
+                           range(xInterp.min(), xInterp.max()+1))
+
+            for fal, frs, lal, lrs in zip(bound['firstAzimuthLine'],
+                                          bound['firstRangeSample'],
+                                          bound['lastAzimuthLine'],
+                                          bound['lastRangeSample']):
+                for iAziLine in range(fal,lal+1):
+                    indexShift = xInterp[0]
+                    noiseLUTgrd[iAziLine, frs:lrs+1] = ewLUT[iAziLine,
+                                                            frs-indexShift:
+                                                            lrs-indexShift+1]
+
+        return noiseLUTgrd
 
     def __getitem__(self, bandID):
 
@@ -114,7 +179,6 @@ class Sentinel1Image(Nansat):
             iPol = name[-3:-1]
         else:
             iPol = name[-2:]
-        iSAFEimg = self.fileName
 
         addUpPower = -23.5
         filterOutPower = -25.0
@@ -125,19 +189,17 @@ class Sentinel1Image(Nansat):
                                 'EW3': 2.366195855 , 'EW4': 2.512694636, \
                                 'EW5': 2.122855427                         }
 
-        ANNO_HEADER_XML = glob.glob('%s/annotation/s1a*-%s-*.xml' % (
-                                                self.fileName,
-                                                iPol.lower()))[0]
-        xmldocElem = parse(ANNO_HEADER_XML)
-        startTime = convertTime2Sec(getValue(xmldocElem,['startTime']))
-        azimuthTimeInterval = float(getValue(xmldocElem,
-                                             ['azimuthTimeInterval']))
-        numberOfSamples = int(getValue(xmldocElem, ['numberOfSamples']))
-        numberOfLines = int(getValue(xmldocElem, ['numberOfLines']))
+        annotXMLname = glob.glob('%s/annotation/s1a*-%s-*.xml' % (
+                                            self.fileName,
+                                            iPol.lower()))[0]
+        self.annotXML = parse(annotXMLname)
+        self.numberOfSamples = int(getValue(self.annotXML, ['numberOfSamples']))
+        self.numberOfLines = int(getValue(self.annotXML, ['numberOfLines']))
+
 
         orbit = { 'time':[], 'px':[], 'py':[], 'pz':[],\
                   'vx':[], 'vy':[], 'vz':[] }
-        orbitList = getElem(xmldocElem,['orbitList'])
+        orbitList = getElem(self.annotXML, ['orbitList'])
         for iOrbit in orbitList.getElementsByTagName('orbit'):
             orbit['time'].append(
                 convertTime2Sec(getValue(iOrbit, ['time'])))
@@ -149,7 +211,7 @@ class Sentinel1Image(Nansat):
             orbit['vz'].append(float(getValue(iOrbit, ['velocity','z'])))
 
         azimuthFmRate = { 'azimuthTime':[], 't0':[], 'c0':[], 'c1':[], 'c2':[] }
-        azimuthFmRateList = getElem(xmldocElem, ['azimuthFmRateList'])
+        azimuthFmRateList = getElem(self.annotXML, ['azimuthFmRateList'])
         azimuthFmRates = azimuthFmRateList.getElementsByTagName('azimuthFmRate')
         for iAzimuthFmRate in azimuthFmRates:
             azimuthFmRate['azimuthTime'].append(
@@ -162,7 +224,7 @@ class Sentinel1Image(Nansat):
             azimuthFmRate['c2'].append(float(tmpValues[2]))
 
         antennaPatternTime = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
-        antPatList = getElem(xmldocElem,['antennaPattern','antennaPatternList'])
+        antPatList = getElem(self.annotXML,['antennaPattern','antennaPatternList'])
         for iAntPat in antPatList.getElementsByTagName('antennaPattern'):
             subswathID = getValue(iAntPat, ['swath'])
             antennaPatternTime[subswathID].append(
@@ -170,7 +232,7 @@ class Sentinel1Image(Nansat):
 
         geolocationGridPoint = { 'azimuthTime':[], 'slantRangeTime':[], \
                                  'line':[], 'pixel':[], 'elevationAngle':[] }
-        geoGridPtList = getElem(xmldocElem,['geolocationGridPointList'])
+        geoGridPtList = getElem(self.annotXML, ['geolocationGridPointList'])
         geolocationGridPoints = geoGridPtList.getElementsByTagName('geolocationGridPoint')
         for iGeoGridPt in geolocationGridPoints:
             geolocationGridPoint['azimuthTime'].append(
@@ -185,23 +247,25 @@ class Sentinel1Image(Nansat):
                             float(getValue(iGeoGridPt, ['elevationAngle'])))
 
         subswathCenter = [1504, 3960, 5948, 7922, 9664]    # nominal values
-        centerLineIndex = numberOfLines / 2
+        centerLineIndex = self.numberOfLines / 2
         wavelength = speedOfLight / radarFrequency
 
-        replicaTime = convertTime2Sec(getValue(xmldocElem, ['replicaList',
-                                                            'replica',
-                                                            'azimuthTime']))
+        replicaTime = convertTime2Sec(getValue(self.annotXML, ['replicaList',
+                                                               'replica',
+                                                               'azimuthTime']))
         zdtBias = (replicaTime - antennaPatternTime['EW1'][0]
                   + np.mean(np.diff(antennaPatternTime['EW1'])) / 2)
 
-        noiseLut = self.getAnnoLut(iPol, 'noise')
-        noiseLutInterp = restoreNoiseLUT(noiseLut)
+
+        bounds = self.get_swath_bounds(iPol)
 
         GRD = {}
+        noiseLUT = self.get_calibration_LUT(iPol, 'noise')
+        GRD['noise'] = self.interpolate_lut(noiseLUT, bounds)
         gridSampleCoord = np.array( (geolocationGridPoint['line'],
                                      geolocationGridPoint['pixel']) ).transpose()
-        GRD['pixel'], GRD['line'] = np.meshgrid(range(numberOfSamples),
-                                                range(numberOfLines))
+        GRD['pixel'], GRD['line'] = np.meshgrid(range(self.numberOfSamples),
+                                                range(self.numberOfLines))
         GRD['azimuthTime'] = griddata(gridSampleCoord,
                                       geolocationGridPoint['azimuthTime'],
                                       (GRD['line'], GRD['pixel']),
@@ -214,11 +278,10 @@ class Sentinel1Image(Nansat):
                                          geolocationGridPoint['elevationAngle'],
                                          (GRD['line'], GRD['pixel']),
                                          method='linear')
-        GRD['noiseLut'] = np.ones((numberOfLines, numberOfSamples)) * np.nan
-        GRD['descallopingGain'] = np.ones((numberOfLines,
-                                           numberOfSamples)) * np.nan
+        GRD['descallopingGain'] = np.ones((self.numberOfLines,
+                                           self.numberOfSamples)) * np.nan
 
-        swathMergeList = getElem(xmldocElem,['swathMergeList'])
+        swathMergeList = getElem(self.annotXML, ['swathMergeList'])
         for iSwathMerge in swathMergeList.getElementsByTagName('swathMerge'):
             subswathID = getValue(iSwathMerge, ['swath'])
             subswathIndex = int(subswathID[-1])-1
@@ -239,7 +302,7 @@ class Sentinel1Image(Nansat):
                        azimuthFmRate['c0']
                      + azimuthFmRate['c1'] * (tau[loopIdx]-azimuthFmRate['t0'])**1
                      + azimuthFmRate['c2'] * (tau[loopIdx]-azimuthFmRate['t0'])**2 )
-                     for loopIdx in range(numberOfLines)])
+                     for loopIdx in range(self.numberOfLines)])
             kt = ka * ks / (ka - ks)
             tw = np.max(np.diff(antennaPatternTime[subswathID])[1:-1])
             zdt = np.array(antennaPatternTime[subswathID]) + zdtBias
@@ -262,27 +325,14 @@ class Sentinel1Image(Nansat):
                 lastRangeSample = int(getValue(iSwathBounds,['lastRangeSample']))
 
                 for iAziLine in range(firstAzimuthLine,lastAzimuthLine+1):
-                    indexShift = noiseLutInterp['pixel'][subswathIndex][0]
-                    GRD['noiseLut'][iAziLine,
-                                    firstRangeSample:lastRangeSample+1] = (
-                            noiseLutInterp[subswathID][iAziLine,
-                                                        firstRangeSample-indexShift:
-                                                        lastRangeSample-indexShift+1])
                     GRD['descallopingGain'][iAziLine,
                                             firstRangeSample:lastRangeSample+1] = (
                           np.ones(lastRangeSample-firstRangeSample+1)
                         * 10**(ds[iAziLine]/10.))
 
+        sigma0LUT = self.get_calibration_LUT(iPol, 'calibration')
+        GRD['sigmaNought'] = self.interpolate_lut(sigma0LUT, bounds)
 
-        sigmaNought = self.getAnnoLut(iPol, 'calibration')
-        sampleCoord = np.array( ( np.dot( np.array(sigmaNought['line'])[np.newaxis].T,
-                                                   np.ones((1, len(sigmaNought['pixel'][0])))).flatten(),
-                                                   np.stack(sigmaNought['pixel']).flatten() ) ).transpose()
-        GRD['sigmaNought'] = np.ones((numberOfLines, numberOfSamples)) * np.nan
-        GRD['sigmaNought'] = griddata(sampleCoord,
-                                      np.stack(sigmaNought['value']).flatten(),
-                                      (GRD['line'], GRD['pixel']),
-                                      method='linear')
 
         DN = self['DN_'+iPol]
         DN[DN == 0] = np.nan
@@ -290,10 +340,10 @@ class Sentinel1Image(Nansat):
             angularDependency = (
                   (0.60717 * np.exp(-0.12296 * GRD['elevationAngle']) + 0.02218) \
                 - (0.60717 * np.exp(-0.12296 * 17.0) + 0.02218))
-            sigma0 = ((DN**2-GRD['noiseLut']/GRD['descallopingGain'])
+            sigma0 = ((DN**2-GRD['noise']/GRD['descallopingGain'])
                      / GRD['sigmaNought']**2 - angularDependency)
         elif iPol=='HV':
-            sigma0 = ((DN**2-GRD['noiseLut']/GRD['descallopingGain'])
+            sigma0 = ((DN**2-GRD['noise']/GRD['descallopingGain'])
                      / GRD['sigmaNought']**2 + 10**(addUpPower/10.))
 
         sigma0[sigma0 < 10**(filterOutPower/10.)] = np.nan
