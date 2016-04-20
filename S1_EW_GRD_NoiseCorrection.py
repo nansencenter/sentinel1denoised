@@ -41,19 +41,34 @@ class Sentinel1Image(Nansat):
     HOW TO COMPUTE EXACT ZERO DOPPLER TIME, ZDT? THIS IS SOMEWHAT UNCLEAR YET.
     I INTRODUCED zdtBias TO ADJUST IT APPROXIMATELY.
     """
-    @property
-    def azimuthAntennaElementPattern(self):
-        ''' Read azimuthAntennaElementPattern from npy file '''
-        aaepFileName = os.path.join(
-                                os.path.dirname(os.path.realpath(__file__)),
-                                'AAEP_V20150722.npz')
-        return np.load(aaepFileName)
+    def __init__(self, fileName, mapperName='', logLevel=30):
+        ''' Read calibration/annotation XML files and AntennaElementPattern'''
+        Nansat.__init__(self, fileName, mapperName=mapperName, logLevel=logLevel)
 
-    def get_calibration_LUT(self, iPol, iProd):
+        self.calibXML = {}
+        self.annotXML = {}
+
+        for pol in ['HH', 'HV']:
+            self.annotXML[pol] = parse(glob.glob(
+                '%s/annotation/s1a*-%s-*.xml' % (self.fileName,
+                                                 pol.lower()))[0])
+            self.calibXML[pol] = {}
+            for prod in ['calibration', 'noise']:
+                self.calibXML[pol][prod] = parse(glob.glob(
+                '%s/annotation/calibration/%s-*-%s-*.xml' % (self.fileName,
+                                                             prod,
+                                                             pol.lower()))[0])
+
+        self.azimuthAntennaElementPattern = np.load(os.path.join(
+                                os.path.dirname(os.path.realpath(__file__)),
+                                'AAEP_V20150722.npz'))
+
+
+    def get_calibration_LUT(self, pol, iProd):
         ''' Read calibration LUT from XML for a given polarization
         Parameters
         ----------
-        iPol : str
+        pol : str
             polarisation: 'HH' or 'HV'
         iProd : str
             product: 'calibration' or 'noise'
@@ -67,14 +82,11 @@ class Sentinel1Image(Nansat):
         if iProd not in ['calibration', 'noise']:
             raise ValueError('iProd must be calibration or noise')
         productDict = { 'calibration':'sigmaNought', 'noise':'noiseLut' }
-        calibXML = parse(glob.glob(
-                            '%s/annotation/calibration/%s-*-%s-*.xml' % (
-                                self.fileName, iProd, iPol.lower()))[0])
 
         pixels = []
         lines = []
         values = []
-        vectorList = getElem(calibXML, [iProd + 'VectorList'])
+        vectorList = getElem(self.calibXML[pol][iProd], [iProd + 'VectorList'])
         for iVector in vectorList.getElementsByTagName(iProd+'Vector'):
             pixels.append(map(int, getValue(iVector,['pixel']).split()))
             lines.append(int(getValue(iVector,['line'])))
@@ -85,12 +97,12 @@ class Sentinel1Image(Nansat):
                     lines = np.array(lines),
                     values = np.array(values))
 
-    def get_swath_bounds(self, iPol):
+    def get_swath_bounds(self, pol):
         ''' Get list of left right top bottom edges for blocks in each swath
 
         Parameters
         ----------
-        iPol : polarisation: 'HH' or 'HV'
+        pol : polarisation: 'HH' or 'HV'
 
         Returns
         -------
@@ -104,7 +116,7 @@ class Sentinel1Image(Nansat):
         '''
         keys = ['firstAzimuthLine', 'firstRangeSample',
                 'lastAzimuthLine', 'lastRangeSample']
-        swathMergeList = getElem(self.annotXML, ['swathMergeList'])
+        swathMergeList = getElem(self.annotXML[pol], ['swathMergeList'])
         swathBounds = {}
         for iSwathMerge in swathMergeList.getElementsByTagName('swathMerge'):
             swathID = getValue(iSwathMerge, ['swath'])
@@ -169,37 +181,11 @@ class Sentinel1Image(Nansat):
 
         return noiseLUTgrd
 
-    def __getitem__(self, bandID):
-
-        band = self.get_GDALRasterBand(bandID)
-        name = band.GetMetadata().get('name', '')
-        if name not in ['sigma0_HH', 'sigma0_HV', 'sigma0HH_', 'sigma0HV_']:
-            return Nansat.__getitem__(self, bandID)
-        if name[-1]=='_':
-            iPol = name[-3:-1]
-        else:
-            iPol = name[-2:]
-
-        addUpPower = -23.5
-        filterOutPower = -25.0
-
-        speedOfLight = 299792458.
-        radarFrequency = 5405000454.33435
-        azimuthSteeringRate = { 'EW1': 2.390895448 , 'EW2': 2.811502724, \
-                                'EW3': 2.366195855 , 'EW4': 2.512694636, \
-                                'EW5': 2.122855427                         }
-
-        annotXMLname = glob.glob('%s/annotation/s1a*-%s-*.xml' % (
-                                            self.fileName,
-                                            iPol.lower()))[0]
-        self.annotXML = parse(annotXMLname)
-        self.numberOfSamples = int(getValue(self.annotXML, ['numberOfSamples']))
-        self.numberOfLines = int(getValue(self.annotXML, ['numberOfLines']))
-
-
-        orbit = { 'time':[], 'px':[], 'py':[], 'pz':[],\
-                  'vx':[], 'vy':[], 'vz':[] }
-        orbitList = getElem(self.annotXML, ['orbitList'])
+    def get_orbit(self, pol):
+        ''' Get orbit parameters from XML '''
+        orbit = { 'time':[], 'px':[], 'py':[], 'pz':[],
+                             'vx':[], 'vy':[], 'vz':[] }
+        orbitList = getElem(self.annotXML[pol], ['orbitList'])
         for iOrbit in orbitList.getElementsByTagName('orbit'):
             orbit['time'].append(
                 convertTime2Sec(getValue(iOrbit, ['time'])))
@@ -210,8 +196,35 @@ class Sentinel1Image(Nansat):
             orbit['vy'].append(float(getValue(iOrbit, ['velocity','y'])))
             orbit['vz'].append(float(getValue(iOrbit, ['velocity','z'])))
 
+        return orbit
+
+    def __getitem__(self, bandID):
+        ''' Apply noise and scaloping gain correction to sigma0_HH/HV '''
+        band = self.get_GDALRasterBand(bandID)
+        name = band.GetMetadata().get('name', '')
+        if name not in ['sigma0_HH', 'sigma0_HV', 'sigma0HH_', 'sigma0HV_']:
+            return Nansat.__getitem__(self, bandID)
+        if name[-1]=='_':
+            pol = name[-3:-1]
+        else:
+            pol = name[-2:]
+
+        addUpPower = -23.5
+        filterOutPower = -25.0
+
+        speedOfLight = 299792458.
+        radarFrequency = 5405000454.33435
+        azimuthSteeringRate = { 'EW1': 2.390895448 , 'EW2': 2.811502724, \
+                                'EW3': 2.366195855 , 'EW4': 2.512694636, \
+                                'EW5': 2.122855427                         }
+
+        self.numberOfSamples = int(getValue(self.annotXML[pol], ['numberOfSamples']))
+        self.numberOfLines = int(getValue(self.annotXML[pol], ['numberOfLines']))
+
+        orbit = self.get_orbit(pol)
+
         azimuthFmRate = { 'azimuthTime':[], 't0':[], 'c0':[], 'c1':[], 'c2':[] }
-        azimuthFmRateList = getElem(self.annotXML, ['azimuthFmRateList'])
+        azimuthFmRateList = getElem(self.annotXML[pol], ['azimuthFmRateList'])
         azimuthFmRates = azimuthFmRateList.getElementsByTagName('azimuthFmRate')
         for iAzimuthFmRate in azimuthFmRates:
             azimuthFmRate['azimuthTime'].append(
@@ -224,7 +237,7 @@ class Sentinel1Image(Nansat):
             azimuthFmRate['c2'].append(float(tmpValues[2]))
 
         antennaPatternTime = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
-        antPatList = getElem(self.annotXML,['antennaPattern','antennaPatternList'])
+        antPatList = getElem(self.annotXML[pol],['antennaPattern','antennaPatternList'])
         for iAntPat in antPatList.getElementsByTagName('antennaPattern'):
             subswathID = getValue(iAntPat, ['swath'])
             antennaPatternTime[subswathID].append(
@@ -232,7 +245,7 @@ class Sentinel1Image(Nansat):
 
         geolocationGridPoint = { 'azimuthTime':[], 'slantRangeTime':[], \
                                  'line':[], 'pixel':[], 'elevationAngle':[] }
-        geoGridPtList = getElem(self.annotXML, ['geolocationGridPointList'])
+        geoGridPtList = getElem(self.annotXML[pol], ['geolocationGridPointList'])
         geolocationGridPoints = geoGridPtList.getElementsByTagName('geolocationGridPoint')
         for iGeoGridPt in geolocationGridPoints:
             geolocationGridPoint['azimuthTime'].append(
@@ -250,18 +263,19 @@ class Sentinel1Image(Nansat):
         centerLineIndex = self.numberOfLines / 2
         wavelength = speedOfLight / radarFrequency
 
-        replicaTime = convertTime2Sec(getValue(self.annotXML, ['replicaList',
+        replicaTime = convertTime2Sec(getValue(self.annotXML[pol], ['replicaList',
                                                                'replica',
                                                                'azimuthTime']))
         zdtBias = (replicaTime - antennaPatternTime['EW1'][0]
                   + np.mean(np.diff(antennaPatternTime['EW1'])) / 2)
 
 
-        bounds = self.get_swath_bounds(iPol)
+        bounds = self.get_swath_bounds(pol)
 
         GRD = {}
-        noiseLUT = self.get_calibration_LUT(iPol, 'noise')
+        noiseLUT = self.get_calibration_LUT(pol, 'noise')
         GRD['noise'] = self.interpolate_lut(noiseLUT, bounds)
+
         gridSampleCoord = np.array( (geolocationGridPoint['line'],
                                      geolocationGridPoint['pixel']) ).transpose()
         GRD['pixel'], GRD['line'] = np.meshgrid(range(self.numberOfSamples),
@@ -281,7 +295,7 @@ class Sentinel1Image(Nansat):
         GRD['descallopingGain'] = np.ones((self.numberOfLines,
                                            self.numberOfSamples)) * np.nan
 
-        swathMergeList = getElem(self.annotXML, ['swathMergeList'])
+        swathMergeList = getElem(self.annotXML[pol], ['swathMergeList'])
         for iSwathMerge in swathMergeList.getElementsByTagName('swathMerge'):
             subswathID = getValue(iSwathMerge, ['swath'])
             subswathIndex = int(subswathID[-1])-1
@@ -330,21 +344,21 @@ class Sentinel1Image(Nansat):
                           np.ones(lastRangeSample-firstRangeSample+1)
                         * 10**(ds[iAziLine]/10.))
 
-        sigma0LUT = self.get_calibration_LUT(iPol, 'calibration')
+        sigma0LUT = self.get_calibration_LUT(pol, 'calibration')
         GRD['sigmaNought'] = self.interpolate_lut(sigma0LUT, bounds)
 
-
-        DN = self['DN_'+iPol]
+        DN = self['DN_'+pol]
         DN[DN == 0] = np.nan
-        if iPol=='HH':
+        if pol=='HH':
             angularDependency = (
                   (0.60717 * np.exp(-0.12296 * GRD['elevationAngle']) + 0.02218) \
                 - (0.60717 * np.exp(-0.12296 * 17.0) + 0.02218))
             sigma0 = ((DN**2-GRD['noise']/GRD['descallopingGain'])
                      / GRD['sigmaNought']**2 - angularDependency)
-        elif iPol=='HV':
+        elif pol=='HV':
             sigma0 = ((DN**2-GRD['noise']/GRD['descallopingGain'])
                      / GRD['sigmaNought']**2 + 10**(addUpPower/10.))
 
         sigma0[sigma0 < 10**(filterOutPower/10.)] = np.nan
+
         return 10*np.log10(sigma0)
