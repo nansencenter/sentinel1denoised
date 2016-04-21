@@ -164,7 +164,7 @@ class Sentinel1Image(Nansat):
                 yInterp = interpFtn(xInterp)
                 ptsValue.append(yInterp)
 
-            values = np.stack(ptsValue)
+            values = np.vstack(ptsValue)
             spline = RectBivariateSpline(iLUT['lines'], xInterp, values, kx=1, ky=1)
             ewLUT = spline(range(iLUT['lines'].min(), iLUT['lines'].max()+1),
                            range(xInterp.min(), xInterp.max()+1))
