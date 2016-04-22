@@ -41,12 +41,14 @@ class Sentinel1Image(Nansat):
     HOW TO COMPUTE EXACT ZERO DOPPLER TIME, ZDT? THIS IS SOMEWHAT UNCLEAR YET.
     I INTRODUCED zdtBias TO ADJUST IT APPROXIMATELY.
     """
+    
     def __init__(self, fileName, mapperName='', logLevel=30):
         ''' Read calibration/annotation XML files and AntennaElementPattern'''
         Nansat.__init__(self, fileName, mapperName=mapperName, logLevel=logLevel)
 
         self.calibXML = {}
         self.annotXML = {}
+        self.auxcalibXML = {}
 
         for pol in ['HH', 'HV']:
             self.annotXML[pol] = parse(glob.glob(
@@ -58,11 +60,52 @@ class Sentinel1Image(Nansat):
                 '%s/annotation/calibration/%s-*-%s-*.xml' % (self.fileName,
                                                              prod,
                                                              pol.lower()))[0])
+        try:
+            self.auxcalibXML = parse(glob.glob(os.path.join(os.path.dirname(
+                                   os.path.realpath(__file__)),
+                                   'S1A_AUX_CAL*.SAFE/data/s1a-aux-cal.xml'))[-1])
+        except IndexError:
+            print('\nERROR: Missing auxiliary product: S1A_AUX_CAL*.SAFE\n\
+                   It must be in the same directory with this module.\n\
+                   You can get it from "https://qc.sentinel1.eo.esa.int/aux_cal"')
 
-        self.azimuthAntennaElementPattern = np.load(os.path.join(
-                                os.path.dirname(os.path.realpath(__file__)),
-                                'AAEP_V20150722.npz'))
+    def get_AAEP(self, pol):
+        ''' Read azimuth antenna elevation pattern from auxiliary XML data 
+            provided by ESA (https://qc.sentinel1.eo.esa.int/aux_cal)
+            
+        Parameters
+        ----------
+        pol : str
+        polarisation: 'HH' or 'HV'
+        
+        Returns
+        -------
+        AAEP : dict
+            EW1, EW2, EW3, EW4, EW5, azimuthAngle - 1D vectors
+        '''
+        
+        keys = ['EW1', 'EW2', 'EW3', 'EW4', 'EW5', 'azimuthAngle']
+        AAEP = dict([(key,[]) for key in keys])
+        xmldocElem = self.auxcalibXML
+        calibParamsList = getElem(xmldocElem,['calibrationParamsList'])
+        for iCalibParams in \
+            calibParamsList.getElementsByTagName('calibrationParams'):
+            subswathID = getValue(iCalibParams,['swath'])
+            if subswathID in keys:
+                values = []
+                polarisation = getValue(iCalibParams,['polarisation'])
+                if polarisation==pol:
+                    angInc = float(getValue(iCalibParams,
+                                 ['azimuthAntennaElementPattern',
+                                  'azimuthAngleIncrement']))
+                    AAEP[subswathID] = np.array(map(float,getValue(iCalibParams,
+                                           ['azimuthAntennaElementPattern',
+                                            'values']).split()))
+                    numberOfPoints = len(AAEP[subswathID])
+        tmpAngle = np.array(range(0,numberOfPoints)) * angInc
+        AAEP['azimuthAngle'] = tmpAngle - tmpAngle.mean()
 
+        return AAEP
 
     def get_calibration_LUT(self, pol, iProd):
         ''' Read calibration LUT from XML for a given polarization
@@ -150,11 +193,17 @@ class Sentinel1Image(Nansat):
             bound = bounds['EW'+str(iSW+1)]
             xInterp = np.array(range(min(bound['firstRangeSample'])-epLen,
                                      max(bound['lastRangeSample'])+epLen))
+            gli = [   (iLine >= bound['firstAzimuthLine'][0])
+                    * (iLine <= bound['lastAzimuthLine'][-1])
+                   for iLine in iLUT['lines']                ]
             ptsValue = []
             for iVec, iLine in enumerate(iLUT['lines']):
-                vecPixel = iLUT['pixels'][iVec]
-                vecValue = iLUT['values'][iVec]
-                blockIdx = np.nonzero(iLine >= bound['firstAzimuthLine'])[0][-1]
+                vecPixel = np.array(iLUT['pixels'][iVec])
+                vecValue = np.array(iLUT['values'][iVec])
+                if gli[iVec]:
+                    blockIdx = np.nonzero(iLine >= bound['firstAzimuthLine'])[0][-1]
+                else:
+                    continue
                 pix0 = bound['firstRangeSample'][blockIdx]
                 pix1 = bound['lastRangeSample'][blockIdx]
                 gpi = (vecPixel >= pix0) * (vecPixel <= pix1)
@@ -165,7 +214,7 @@ class Sentinel1Image(Nansat):
                 ptsValue.append(yInterp)
 
             values = np.vstack(ptsValue)
-            spline = RectBivariateSpline(iLUT['lines'], xInterp, values, kx=1, ky=1)
+            spline = RectBivariateSpline(iLUT['lines'][np.nonzero(gli)], xInterp, values, kx=1, ky=1)
             ewLUT = spline(range(iLUT['lines'].min(), iLUT['lines'].max()+1),
                            range(xInterp.min(), xInterp.max()+1))
 
@@ -294,13 +343,15 @@ class Sentinel1Image(Nansat):
                                          method='linear')
         GRD['descallopingGain'] = np.ones((self.numberOfLines,
                                            self.numberOfSamples)) * np.nan
+                                           
+        AAEP = self.get_AAEP(pol)
 
         swathMergeList = getElem(self.annotXML[pol], ['swathMergeList'])
         for iSwathMerge in swathMergeList.getElementsByTagName('swathMerge'):
             subswathID = getValue(iSwathMerge, ['swath'])
             subswathIndex = int(subswathID[-1])-1
-            aziAntElemPat = self.azimuthAntennaElementPattern[subswathID]
-            aziAntElemAng = self.azimuthAntennaElementPattern['azimuthAngle']
+            aziAntElemPat = AAEP[subswathID]
+            aziAntElemAng = AAEP['azimuthAngle']
 
             kw = azimuthSteeringRate[subswathID] * np.pi / 180
 
