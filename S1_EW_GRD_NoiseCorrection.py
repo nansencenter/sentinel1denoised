@@ -1,12 +1,9 @@
 import os
 import glob
-import xml.etree.ElementTree as ET
-from xml.dom.minidom import parse, parseString
-
 import numpy as np
+from xml.dom.minidom import parse
 from scipy.interpolate import griddata, InterpolatedUnivariateSpline
 from scipy.interpolate import RectBivariateSpline
-
 from nansat import Nansat
 
 def getElem(elem, tags):
@@ -43,7 +40,7 @@ class Sentinel1Image(Nansat):
     """
     
     def __init__(self, fileName, mapperName='', logLevel=30):
-        ''' Read calibration/annotation XML files and AntennaElementPattern'''
+        ''' Read calibration/annotation XML files and auxiliary data XML file '''
         Nansat.__init__(self, fileName, mapperName=mapperName, logLevel=logLevel)
 
         self.calibXML = {}
@@ -60,6 +57,14 @@ class Sentinel1Image(Nansat):
                 '%s/annotation/calibration/%s-*-%s-*.xml' % (self.fileName,
                                                              prod,
                                                              pol.lower()))[0])
+    
+        manifestXML = parse('%s/manifest.safe' % self.fileName)
+        IPFver = float(manifestXML.getElementsByTagName('safe:software')[0].\
+                           attributes['version'].value)
+        if IPFver < 2.60:
+            print('\nWARNING: IPF version of input image is lower than 2.60! '
+                  'Noise correction result can be wrong!\n')
+
         try:
             self.auxcalibXML = parse(glob.glob(os.path.join(os.path.dirname(
                                    os.path.realpath(__file__)),
