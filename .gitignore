@@ -60,3 +60,4 @@ target/
 
 #Ipython Notebook
 .ipynb_checkpoints
+noise_scaling_coeff.py
