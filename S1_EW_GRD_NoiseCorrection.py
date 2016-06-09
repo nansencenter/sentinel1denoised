@@ -40,7 +40,7 @@ class Sentinel1Image(Nansat):
     HOW TO COMPUTE EXACT ZERO DOPPLER TIME, ZDT? THIS IS SOMEWHAT UNCLEAR YET.
     I INTRODUCED zdtBias TO ADJUST IT APPROXIMATELY.
     """
-    
+
     def __init__(self, fileName, mapperName='', logLevel=30):
         ''' Read calibration/annotation XML files and auxiliary XML file '''
         Nansat.__init__( self, fileName,
@@ -58,7 +58,7 @@ class Sentinel1Image(Nansat):
                 self.calibXML[pol][prod] = parse(glob.glob(
                     '%s/annotation/calibration/%s-*-%s-*.xml'
                     % (self.fileName,prod,pol.lower()))[0])
-    
+
         manifestXML = parse('%s/manifest.safe' % self.fileName)
         self.IPFver = float( manifestXML.\
                              getElementsByTagName('safe:software')[0].\
@@ -82,20 +82,20 @@ class Sentinel1Image(Nansat):
                    You can get it from https://qc.sentinel1.eo.esa.int/aux_cal')
 
     def get_AAEP(self, pol):
-        ''' Read azimuth antenna elevation pattern from auxiliary XML data 
+        ''' Read azimuth antenna elevation pattern from auxiliary XML data
             provided by ESA (https://qc.sentinel1.eo.esa.int/aux_cal)
-            
+
         Parameters
         ----------
         pol : str
         polarisation: 'HH' or 'HV'
-        
+
         Returns
         -------
         AAEP : dict
             EW1, EW2, EW3, EW4, EW5, azimuthAngle - 1D vectors
         '''
-        
+
         keys = ['EW1', 'EW2', 'EW3', 'EW4', 'EW5', 'azimuthAngle']
         AAEP = dict([(key,[]) for key in keys])
         xmldocElem = self.auxcalibXML
@@ -259,7 +259,7 @@ class Sentinel1Image(Nansat):
             orbit['vz'].append(float(getValue(iOrbit, ['velocity','z'])))
 
         return orbit
-    
+
     def get_azimuthFmRate(self, pol):
         ''' Get azimuth FM rate from XML '''
         azimuthFmRate = { 'azimuthTime':[], 't0':[], 'c0':[], 'c1':[], 'c2':[] }
@@ -274,7 +274,7 @@ class Sentinel1Image(Nansat):
             azimuthFmRate['c0'].append(float(tmpValues[0]))
             azimuthFmRate['c1'].append(float(tmpValues[1]))
             azimuthFmRate['c2'].append(float(tmpValues[2]))
-        
+
         return azimuthFmRate
 
     def __getitem__(self, bandID):
@@ -330,7 +330,7 @@ class Sentinel1Image(Nansat):
                   + np.mean(np.diff(antennaPatternTime['EW1']))/2)
 
         bounds = self.get_swath_bounds(pol)
-        
+
         subswathCenter = [
             int(np.mean((   np.array(bounds['EW%d' % idx]['firstRangeSample'])
                           + np.array(bounds['EW%d' % idx]['lastRangeSample']) )/2))
@@ -372,7 +372,7 @@ class Sentinel1Image(Nansat):
                                            self.numberOfSamples)) * np.nan
         GRD['subswathIndex'] = np.ones((self.numberOfLines,
                                         self.numberOfSamples)) * np.nan
-                                      
+
         GRD['DN'] = self['DN_'+pol]
         GRD['DN'][GRD['DN']==0] = np.nan
         GRD['sigma0'] = np.ones_like(GRD['DN'])*np.nan
@@ -443,9 +443,28 @@ class Sentinel1Image(Nansat):
                                          firstRangeSample:lastRangeSample+1] = (
                           np.ones(lastRangeSample-firstRangeSample+1)
                         * subswathIndex )
-            
-        noiseScalingCoeff = np.array([ 1.0 , 1.0 , 1.0 , 1.0 , 1.0 ])
-        sigma0Adjustment = np.array([ 0 , 0 , 0 , 0 , 0 ])
+
+        try:
+            from noise_scaling_coeff import noise_scaling
+        except:
+            noiseScalingCoeff = np.array([ 1.0 , 1.0 , 1.0 , 1.0 , 1.0 ])
+            sigma0Adjustment = np.array([ 0 , 0 , 0 , 0 , 0 ])
+        else:
+            if (noisePowerPreScalingFactor != 1.0) and (IPFver < 2.53):
+                noiseScalingCoeff = np.array(noise_scaling['<2.53']['noiseScalingCoeff'])
+                sigma0Adjustment = np.array(noise_scaling['<2.53']['sigma0Adjustment'])
+            elif (noisePowerPreScalingFactor == 1.0) and (2.50 <= IPFver < 2.60):
+                noiseScalingCoeff = np.array(noise_scaling['2.50-2.60']['noiseScalingCoeff'])
+                sigma0Adjustment = np.array(noise_scaling['2.50-2.60']['sigma0Adjustment'])
+            elif (noisePowerPreScalingFactor == 1.0) and (2.60 <= IPFver < 2.70):
+                noiseScalingCoeff = np.array(noise_scaling['2.60-2.70']['noiseScalingCoeff'])
+                sigma0Adjustment = np.array(noise_scaling['2.60-2.70']['sigma0Adjustment'])
+            elif (noisePowerPreScalingFactor == 1.0) and (2.70 <= IPFver < 2.80):
+                noiseScalingCoeff = np.array(noise_scaling['2.70-2.80']['noiseScalingCoeff'])
+                sigma0Adjustment = np.array(noise_scaling['2.70-2.80']['sigma0Adjustment'])
+            else:
+                noiseScalingCoeff = np.array([ 1.0 , 1.0 , 1.0 , 1.0 , 1.0 ])
+                sigma0Adjustment = np.array([ 0 , 0 , 0 , 0 , 0 ])
 
         GRD['sigma0'] = GRD['DN']**2 / GRD['sigmaNought']**2
         rawSigma0 = np.nanmean(GRD['sigma0'],axis=0)
@@ -479,5 +498,9 @@ class Sentinel1Image(Nansat):
 
         calibS0[np.nan_to_num(calibS0)<0] = np.nan
         calibSigma0 = np.nanmean(calibS0,axis=0)
-
+        '''
+        return 10*np.log10(calibS0), rawSigma0, rawNEsigma0, calibSigma0, \
+               calibNEsigma0, elevAngle, noisePowerPreScalingFactor, \
+               noiseScalingCoeff, sigma0Adjustment
+        '''
         return 10*np.log10(calibS0)
