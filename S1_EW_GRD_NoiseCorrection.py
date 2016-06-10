@@ -1,7 +1,7 @@
 import os
 import glob
 import numpy as np
-from xml.dom.minidom import parse
+from xml.dom.minidom import parse, parseString
 from scipy.interpolate import griddata, InterpolatedUnivariateSpline
 from scipy.interpolate import RectBivariateSpline
 from nansat import Nansat
@@ -48,21 +48,18 @@ class Sentinel1Image(Nansat):
         self.calibXML = {}
         self.annotXML = {}
         self.auxcalibXML = {}
-
         for pol in ['HH', 'HV']:
-            self.annotXML[pol] = parse(glob.glob(
-                '%s/annotation/s1a*-%s-*.xml'
-                % (self.fileName,pol.lower()))[0])
+            self.annotXML[pol] = parseString(self.vrt.annotationXMLDict[pol.lower()])
             self.calibXML[pol] = {}
-            for prod in ['calibration', 'noise']:
-                self.calibXML[pol][prod] = parse(glob.glob(
-                    '%s/annotation/calibration/%s-*-%s-*.xml'
-                    % (self.fileName,prod,pol.lower()))[0])
+            self.calibXML[pol]['calibration'] = parseString(
+                                            self.vrt.calXMLDict[pol.lower()])
+            self.calibXML[pol]['noise'] = parseString(
+                                            self.vrt.noiseXMLDict[pol.lower()])
 
-        manifestXML = parse('%s/manifest.safe' % self.fileName)
-        self.IPFver = float( manifestXML.\
-                             getElementsByTagName('safe:software')[0].\
-                             attributes['version'].value )
+        manifestXML = parseString(self.vrt.manifestXML)
+        self.IPFver = float(manifestXML
+                                .getElementsByTagName('safe:software')[0]
+                                .attributes['version'].value )
 
         if self.IPFver < 2.43:
             print('\nERROR: IPF version of input image is lower than 2.43! '
@@ -74,8 +71,8 @@ class Sentinel1Image(Nansat):
 
         try:
             self.auxcalibXML = parse(glob.glob(
-                os.path.join( os.path.dirname(os.path.realpath(__file__)),
-                              'S1A_AUX_CAL*.SAFE/data/s1a-aux-cal.xml') )[-1])
+                os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             'S1A_AUX_CAL*.SAFE/data/s1a-aux-cal.xml') )[-1])
         except IndexError:
             print('\nERROR: Missing auxiliary product: S1A_AUX_CAL*.SAFE\n\
                    It must be in the same directory with this module.\n\
@@ -100,8 +97,8 @@ class Sentinel1Image(Nansat):
         AAEP = dict([(key,[]) for key in keys])
         xmldocElem = self.auxcalibXML
         calibParamsList = getElem(xmldocElem,['calibrationParamsList'])
-        for iCalibParams in \
-            calibParamsList.getElementsByTagName('calibrationParams'):
+        for iCalibParams in (calibParamsList
+                                .getElementsByTagName('calibrationParams')):
             subswathID = getValue(iCalibParams,['swath'])
             if subswathID in keys:
                 values = []
