@@ -341,46 +341,47 @@ class Sentinel1Image(Nansat):
         sigma0LUT = self.get_calibration_LUT(pol, 'calibration')
         AAEP = self.get_AAEP(pol)
 
-        GRD = {}
-        GRD['noise'] = self.interpolate_lut(noiseLUT, bounds)
-        GRD['sigmaNought'] = self.interpolate_lut(sigma0LUT, bounds)
+        GRD_noise = self.interpolate_lut(noiseLUT, bounds).astype(np.float32)
+        GRD_radCalCoeff = self.interpolate_lut(sigma0LUT, bounds).astype(np.float32)
 
         gridSampleCoord = np.array( (geolocationGridPoint['line'],
                                      geolocationGridPoint['pixel']) ).transpose()
-        GRD['pixel'], GRD['line'] = np.meshgrid(range(self.numberOfSamples),
+        GRD_pixel, GRD_line = np.meshgrid(range(self.numberOfSamples),
                                                 range(self.numberOfLines))
-        GRD['azimuthTime'] = griddata(gridSampleCoord,
+        GRD_pixel = GRD_pixel.astype(np.uint32)
+        GRD_line = GRD_line.astype(np.uint32)
+        azimuthTimeAtSubswathCentre = griddata(gridSampleCoord,
                                       geolocationGridPoint['azimuthTime'],
-                                      (GRD['line'][:,subswathCenter],
-                                       GRD['pixel'][:,subswathCenter]),
+                                      (GRD_line[:,subswathCenter],
+                                       GRD_pixel[:,subswathCenter]),
                                       method='linear')
-        GRD['slantRangeTime'] = griddata(gridSampleCoord,
+        slantRangeTimeAtSubswathCentre = griddata(gridSampleCoord,
                                          geolocationGridPoint['slantRangeTime'],
-                                         (GRD['line'][:,subswathCenter],
-                                          GRD['pixel'][:,subswathCenter]),
+                                         (GRD_line[:,subswathCenter],
+                                          GRD_pixel[:,subswathCenter]),
                                          method='linear')
-        GRD['elevationAngle'] = griddata(gridSampleCoord,
+        GRD_elevationAngle = griddata(gridSampleCoord,
                                          geolocationGridPoint['elevationAngle'],
-                                         (GRD['line'], GRD['pixel']),
+                                         (GRD_line, GRD_pixel),
                                          method='linear')
-        elevAngle = np.nanmean(GRD['elevationAngle'],axis=0)
-        del GRD['pixel'], GRD['line']
-        GRD['descallopingGain'] = np.ones((self.numberOfLines,
-                                           self.numberOfSamples)) * np.nan
-        GRD['subswathIndex'] = np.ones((self.numberOfLines,
-                                        self.numberOfSamples)) * np.nan
+        elevAngle = np.nanmean(GRD_elevationAngle,axis=0)
+        del GRD_pixel, GRD_line
+        GRD_descallopingGain = np.ones((self.numberOfLines,
+                                           self.numberOfSamples),dtype=np.float32) * np.nan
+        GRD_subswathIndex = np.ones((self.numberOfLines,
+                                     self.numberOfSamples),dtype=np.int8) * (-1)
 
-        GRD['DN'] = self['DN_'+pol]
-        GRD['DN'][GRD['DN']==0] = np.nan
-        GRD['sigma0'] = np.ones_like(GRD['DN'])*np.nan
-        GRD['sigma0'][200:-200,200:-200] = \
-            GRD['DN'][200:-200,200:-200]**2 / GRD['sigmaNought'][200:-200,200:-200]**2
-        GRD['NEsigma0'] = GRD['noise'] / GRD['sigmaNought']**2
-        if 10*np.log10(np.nanmean(GRD['NEsigma0'])) < -40:
-            noisePowerPreScalingFactor = 10**(-30.00/10.) / np.nanmean(GRD['NEsigma0'])
+        GRD_DN = self['DN_'+pol]
+        GRD_DN[GRD_DN==0] = np.nan
+        GRD_sigma0 = np.ones_like(GRD_DN)*np.nan
+        GRD_sigma0[200:-200,200:-200] = \
+            GRD_DN[200:-200,200:-200]**2 / GRD_radCalCoeff[200:-200,200:-200]**2
+        GRD_NEsigma0 = GRD_noise / GRD_radCalCoeff**2
+        if 10*np.log10(np.nanmean(GRD_NEsigma0)) < -40:
+            noisePowerPreScalingFactor = 10**(-30.00/10.) / np.nanmean(GRD_NEsigma0)
         else:
             noisePowerPreScalingFactor = 1.0
-        GRD['NEsigma0'] *= noisePowerPreScalingFactor
+        GRD_NEsigma0 *= noisePowerPreScalingFactor
         noiseScalingCoeff = np.zeros(5)
         sigma0Adjustment = np.zeros(5)
         fitSlopes = np.zeros(5)
@@ -394,8 +395,8 @@ class Sentinel1Image(Nansat):
             aziAntElemAng = AAEP['azimuthAngle']
 
             kw = azimuthSteeringRate[subswathID] * np.pi / 180
-            eta = np.copy(GRD['azimuthTime'][:, subswathIndex])
-            tau = np.copy(GRD['slantRangeTime'][:, subswathIndex])
+            eta = np.copy(azimuthTimeAtSubswathCentre[:, subswathIndex])
+            tau = np.copy(slantRangeTimeAtSubswathCentre[:, subswathIndex])
             Vs = np.linalg.norm( np.array(
                     [ np.interp(eta,orbit['time'],orbit['vx']),
                       np.interp(eta,orbit['time'],orbit['vy']),
@@ -432,72 +433,49 @@ class Sentinel1Image(Nansat):
                 lastRangeSample = int(getValue(iSwathBounds,['lastRangeSample']))
 
                 for iAziLine in range(firstAzimuthLine,lastAzimuthLine+1):
-                    GRD['descallopingGain'][iAziLine,
+                    GRD_descallopingGain[iAziLine,
                                             firstRangeSample:lastRangeSample+1] = (
                           np.ones(lastRangeSample-firstRangeSample+1)
                         * 10**(ds[iAziLine]/10.))
-                    GRD['subswathIndex'][iAziLine,
+                    GRD_subswathIndex[iAziLine,
                                          firstRangeSample:lastRangeSample+1] = (
-                          np.ones(lastRangeSample-firstRangeSample+1)
+                          np.ones(lastRangeSample-firstRangeSample+1,dtype=np.int8)
                         * subswathIndex )
 
         try:
             from noise_scaling_coeff import noise_scaling
+            noiseScalingCoeff,sigma0Adjustment = \
+                noise_scaling(noisePowerPreScalingFactor,IPFver)
         except:
             noiseScalingCoeff = np.array([ 1.0 , 1.0 , 1.0 , 1.0 , 1.0 ])
             sigma0Adjustment = np.array([ 0 , 0 , 0 , 0 , 0 ])
-        else:
-            if (noisePowerPreScalingFactor != 1.0) and (IPFver < 2.53):
-                noiseScalingCoeff = np.array(noise_scaling['<2.53']['noiseScalingCoeff'])
-                sigma0Adjustment = np.array(noise_scaling['<2.53']['sigma0Adjustment'])
-            elif (noisePowerPreScalingFactor == 1.0) and (2.50 <= IPFver < 2.60):
-                noiseScalingCoeff = np.array(noise_scaling['2.50-2.60']['noiseScalingCoeff'])
-                sigma0Adjustment = np.array(noise_scaling['2.50-2.60']['sigma0Adjustment'])
-            elif (noisePowerPreScalingFactor == 1.0) and (2.60 <= IPFver < 2.70):
-                noiseScalingCoeff = np.array(noise_scaling['2.60-2.70']['noiseScalingCoeff'])
-                sigma0Adjustment = np.array(noise_scaling['2.60-2.70']['sigma0Adjustment'])
-            elif (noisePowerPreScalingFactor == 1.0) and (2.70 <= IPFver < 2.80):
-                noiseScalingCoeff = np.array(noise_scaling['2.70-2.80']['noiseScalingCoeff'])
-                sigma0Adjustment = np.array(noise_scaling['2.70-2.80']['sigma0Adjustment'])
-            else:
-                noiseScalingCoeff = np.array([ 1.0 , 1.0 , 1.0 , 1.0 , 1.0 ])
-                sigma0Adjustment = np.array([ 0 , 0 , 0 , 0 , 0 ])
 
-        GRD['sigma0'] = GRD['DN']**2 / GRD['sigmaNought']**2
-        rawSigma0 = np.nanmean(GRD['sigma0'],axis=0)
-        GRD['NEsigma0'] = GRD['noise'] / GRD['sigmaNought']**2 * noisePowerPreScalingFactor
-        rawNEsigma0 = np.nanmean(GRD['NEsigma0'],axis=0) / noisePowerPreScalingFactor
+        GRD_sigma0 = GRD_DN**2 / GRD_radCalCoeff**2
+        rawSigma0 = np.nanmean(GRD_sigma0,axis=0)
+        GRD_NEsigma0 = GRD_noise / GRD_radCalCoeff**2 * noisePowerPreScalingFactor
+        rawNEsigma0 = np.nanmean(GRD_NEsigma0,axis=0) / noisePowerPreScalingFactor
         for subswathIndex in range(5):
-            subswathMask = (GRD['subswathIndex']==subswathIndex)
-            GRD['NEsigma0'][subswathMask] = ( (   GRD['NEsigma0'][subswathMask]
-                                         / GRD['descallopingGain'][subswathMask]
+            subswathMask = (GRD_subswathIndex==subswathIndex)
+            GRD_NEsigma0[subswathMask] = ( (   GRD_NEsigma0[subswathMask]
+                                         / GRD_descallopingGain[subswathMask]
                                          * noiseScalingCoeff[subswathIndex] )
                                       - sigma0Adjustment[subswathIndex] )
-        del GRD['DN'], GRD['noise'], GRD['sigmaNought'], subswathMask
-        meanNoisePower = np.nanmean(GRD['NEsigma0'])
-        GRD['NEsigma0'] = GRD['NEsigma0']-meanNoisePower
-        calibNEsigma0 = np.nanmean(GRD['NEsigma0'],axis=0)
+        del GRD_DN, GRD_noise, GRD_radCalCoeff, subswathMask
+        meanNoisePower = np.nanmean(GRD_NEsigma0)
+        GRD_NEsigma0 = GRD_NEsigma0-meanNoisePower
+        calNEsigma0 = np.nanmean(GRD_NEsigma0,axis=0)
         sigma0Adjustment = sigma0Adjustment+meanNoisePower
 
-        print('IPF version: %s' % IPFver )
-        print('noise pre-scaling coefficient: %s' % noisePowerPreScalingFactor )
-        print('noise scaling coefficient: %s' % noiseScalingCoeff )
-        print('sigma0 adjustment power: %s' % sigma0Adjustment )
-
         if pol=='HH':
-            angularDependency = (
-                  10**(0.2447 * (GRD['elevationAngle']-17.0) /10.) )
-            calibS0 = (GRD['sigma0'] - GRD['NEsigma0']) * angularDependency
+            GRD_angularDependency = (
+                  10**(0.2447 * (GRD_elevationAngle-17.0) /10.) )
+            GRD_NCsigma0 = (GRD_sigma0 - GRD_NEsigma0) * GRD_angularDependency
             del angularDependency
         elif pol=='HV':
-            calibS0 = GRD['sigma0'] - GRD['NEsigma0']
-            #calibS0 = calibS0+10**(-24.5/10.)
+            GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0
+            #GRD_NCsigma0 = GRD_NCsigma0+10**(-24.5/10.)
 
-        calibS0[np.nan_to_num(calibS0)<0] = np.nan
-        calibSigma0 = np.nanmean(calibS0,axis=0)
-        '''
-        return 10*np.log10(calibS0), rawSigma0, rawNEsigma0, calibSigma0, \
-               calibNEsigma0, elevAngle, noisePowerPreScalingFactor, \
-               noiseScalingCoeff, sigma0Adjustment
-        '''
-        return 10*np.log10(calibS0)
+        GRD_NCsigma0[np.nan_to_num(GRD_NCsigma0)<0] = np.nan
+        calSigma0 = np.nanmean(GRD_NCsigma0,axis=0)
+
+        return 10*np.log10(GRD_NCsigma0)
