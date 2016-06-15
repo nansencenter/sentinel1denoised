@@ -470,7 +470,7 @@ class Sentinel1Image(Nansat):
             GRD_angularDependency = (
                   10**(0.2447 * (GRD_elevationAngle-17.0) /10.) )
             GRD_NCsigma0 = (GRD_sigma0 - GRD_NEsigma0) * GRD_angularDependency
-            del angularDependency
+            del GRD_angularDependency
         elif pol=='HV':
             GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0
             #GRD_NCsigma0 = GRD_NCsigma0+10**(-24.5/10.)
