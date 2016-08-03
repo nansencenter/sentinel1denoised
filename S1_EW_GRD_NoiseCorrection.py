@@ -31,9 +31,7 @@ class Sentinel1Image(Nansat):
 
     FOR HH CHANNEL,
         THERMAL NOISE SUBTRACTION + SCALOPING CORRECTION
-        + ANGULAR DEPENDENCY REMOVAL (REFERECE ANGLE = 17.0 DEGREE)
-        LINEAR EQUATION (IN LOG SCALE):
-            -0.2447 * ANGLE - 6.6088
+        + ANGULAR DEPENDENCY REMOVAL (REFERECE ANGLE = 30.0 DEGREE)
     FOR HV CHANNEL,
         THERMAL NOISE SUBTRACTION + SCALOPING CORRECTION
 
@@ -371,22 +369,6 @@ class Sentinel1Image(Nansat):
         GRD_subswathIndex = np.ones((self.numberOfLines,
                                      self.numberOfSamples),dtype=np.int8) * (-1)
 
-        GRD_DN = self['DN_'+pol]
-        GRD_DN[GRD_DN==0] = np.nan
-        GRD_sigma0 = np.ones_like(GRD_DN)*np.nan
-        GRD_sigma0[200:-200,200:-200] = \
-            GRD_DN[200:-200,200:-200]**2 / GRD_radCalCoeff[200:-200,200:-200]**2
-        GRD_NEsigma0 = GRD_noise / GRD_radCalCoeff**2
-        if 10*np.log10(np.nanmean(GRD_NEsigma0)) < -40:
-            noisePowerPreScalingFactor = 10**(-30.00/10.) / np.nanmean(GRD_NEsigma0)
-        else:
-            noisePowerPreScalingFactor = 1.0
-        GRD_NEsigma0 *= noisePowerPreScalingFactor
-        noiseScalingCoeff = np.zeros(5)
-        sigma0Adjustment = np.zeros(5)
-        fitSlopes = np.zeros(5)
-        fitIntercepts = np.zeros(5)
-
         swathMergeList = getElem(self.annotXML[pol], ['swathMergeList'])
         for iSwathMerge in swathMergeList.getElementsByTagName('swathMerge'):
             subswathID = getValue(iSwathMerge, ['swath'])
@@ -441,41 +423,214 @@ class Sentinel1Image(Nansat):
                                          firstRangeSample:lastRangeSample+1] = (
                           np.ones(lastRangeSample-firstRangeSample+1,dtype=np.int8)
                         * subswathIndex )
+        
+        
+        #runMode = 'HVnoiseScaling'
+        #runMode = 'HVbalancingPower'
+        #runMode = 'HHbalancingPower'
+        runMode = 'operational'
+        numberOfAzimuthSubBlock = 5
 
-        try:
+        GRD_DN = self['DN_'+pol]
+        GRD_DN[GRD_DN==0] = np.nan
+        GRD_sigma0SW = np.nanmedian(GRD_DN**2 / GRD_radCalCoeff**2, axis=0)
+        GRD_sigma0 = GRD_DN**2 / GRD_radCalCoeff**2
+        GRD_NEsigma0 = GRD_noise / GRD_radCalCoeff**2
+        if 10*np.log10(np.nanmean(GRD_NEsigma0)) < -40:
+            noisePowerPreScalingFactor = 10**(-30.00/10.) / np.nanmean(GRD_NEsigma0)
+        else:
+            noisePowerPreScalingFactor = 1.0
+        GRD_NEsigma0 *= noisePowerPreScalingFactor
+
+        if runMode != 'operational':
+            sideCutN = 15
+
+            noiseScalingCoeff = np.zeros((5,numberOfAzimuthSubBlock))
+            fitSlopes = np.zeros((5,numberOfAzimuthSubBlock))
+            fitIntercepts = np.zeros((5,numberOfAzimuthSubBlock))
+            fitResiduals = np.zeros((5,numberOfAzimuthSubBlock))
+            meanRawSigma0 = np.zeros((5,numberOfAzimuthSubBlock))
+            minAzimuthIndex = max([min(bounds['EW'+str(i+1)]['firstAzimuthLine']) for i in range(5)])
+            maxAzimuthIndex = min([max(bounds['EW'+str(i+1)]['lastAzimuthLine']) for i in range(5)])
+            subBlockStartIndex = np.linspace(minAzimuthIndex,maxAzimuthIndex,
+                                             numberOfAzimuthSubBlock+1,dtype='uint')[:-1]
+            subBlockEndIndex = np.linspace(minAzimuthIndex,maxAzimuthIndex,
+                                           numberOfAzimuthSubBlock+1,dtype='uint')[1:]
+            subBlockCenterIndex = (subBlockStartIndex+subBlockEndIndex)/2
+                
+            for iSubswathIndex in range(5):
+                minRangeIndex = max(bounds['EW'+str(iSubswathIndex+1)]['firstRangeSample'])
+                maxRangeIndex = min(bounds['EW'+str(iSubswathIndex+1)]['lastRangeSample'])
+                subswathMask = (GRD_subswathIndex==iSubswathIndex)
+                validRangeMask = np.logical_and(
+                    np.logical_and( np.arange(self.numberOfSamples)>=(minRangeIndex+sideCutN),
+                                    np.arange(self.numberOfSamples)<=(maxRangeIndex-sideCutN) ),
+                    10*np.log10(np.nanmin(GRD_sigma0,axis=0))>=-40.)
+                if sum(validRangeMask) < 0.5*(maxRangeIndex-minRangeIndex):
+                    validRangeMask = np.logical_and(
+                        np.arange(self.numberOfSamples)>=(minRangeIndex+sideCutN),
+                        np.arange(self.numberOfSamples)<=(maxRangeIndex-sideCutN) )
+
+                for iSubBlockIndex in range(numberOfAzimuthSubBlock):
+                    sigma0SW = np.nanmedian( (GRD_sigma0*subswathMask)
+                                             [subBlockStartIndex[iSubBlockIndex]:
+                                              subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
+                    meanRawSigma0[iSubswathIndex,iSubBlockIndex] = np.nanmean(sigma0SW[validRangeMask])
+                    NEsigma0SW = np.nanmedian( (GRD_NEsigma0/GRD_descallopingGain*subswathMask)
+                                               [subBlockStartIndex[iSubBlockIndex]:
+                                                subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
+                    ###NEsigma0SW = NEsigma0SW-np.nanmean(NEsigma0SW[validRangeMask])
+                    NEsigma0SW = NEsigma0SW-NEsigma0SW[np.nonzero(NEsigma0SW)].mean()
+                    rangeIndex = np.arange(sigma0SW.shape[0])[validRangeMask]
+                    # Consider ddopting Newton method for fast efficient computation
+                    if runMode == 'HVnoiseScaling':
+                        scalingFactor = np.linspace(0.0,2.0,201)
+                    elif np.logical_or(runMode=='HHbalancingPower',runMode=='HVbalancingPower'):
+                        from noise_scaling_coeff import noise_scaling
+                        scalingFactor = np.array([
+                            noise_scaling(noisePowerPreScalingFactor,pol,IPFver)[0][iSubswathIndex],
+                            noise_scaling(noisePowerPreScalingFactor,pol,IPFver)[0][iSubswathIndex] ])
+                    slopes = np.zeros_like(scalingFactor)
+                    intercepts = np.zeros_like(scalingFactor)
+                    residuals = np.zeros_like(scalingFactor)
+                    weightFactor = NEsigma0SW[rangeIndex]
+                    weightFactor = ((  (weightFactor-np.min(weightFactor))
+                                     /(np.max(weightFactor)-np.min(weightFactor)))+1)/2.
+                    #weightFactor = np.ones_like(weightFactor)
+                    
+                    for i,sf in enumerate(scalingFactor):
+                        denoisedPower = (sigma0SW-NEsigma0SW*sf)[rangeIndex]
+                        if sum(denoisedPower<0) >= len(denoisedPower)*0.3:
+                            residuals[i] = +np.inf
+                            continue
+                        else:
+                            denoisedPower = 10*np.log10(denoisedPower)
+                            vM = np.isfinite(denoisedPower)
+                            P = np.polyfit( rangeIndex[vM],denoisedPower[vM],deg=1,
+                                            full='True',w=weightFactor[vM])
+                            slopes[i], intercepts[i] = P[0]
+                            residuals[i] = P[1]
+
+                    bestFitIndex = np.where(residuals==min(residuals))[0][0]
+                    noiseScalingCoeff[iSubswathIndex,iSubBlockIndex] = scalingFactor[bestFitIndex]
+                    fitSlopes[iSubswathIndex,iSubBlockIndex] = slopes[bestFitIndex]
+                    fitIntercepts[iSubswathIndex,iSubBlockIndex] = intercepts[bestFitIndex]
+                    fitResiduals[iSubswathIndex,iSubBlockIndex] = residuals[bestFitIndex]
+                    
+                    
+                    sigma0SW = np.nanmean( (GRD_sigma0*subswathMask)
+                                            [subBlockStartIndex[iSubBlockIndex]:
+                                             subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
+                    NEsigma0SW = np.nanmean( (GRD_NEsigma0/GRD_descallopingGain*subswathMask)
+                                              [subBlockStartIndex[iSubBlockIndex]:
+                                               subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
+                    NEsigma0SW = NEsigma0SW-NEsigma0SW[np.nonzero(NEsigma0SW)].mean()
+                    denoisedPower = 10*np.log10((sigma0SW-NEsigma0SW*scalingFactor[bestFitIndex])[rangeIndex])
+                    vM = np.isfinite(denoisedPower)
+                    P = np.polyfit( rangeIndex[vM],denoisedPower[vM],deg=1,
+                                    full='True',w=weightFactor[vM])
+                    fitSlopes[iSubswathIndex,iSubBlockIndex],fitIntercepts[iSubswathIndex,iSubBlockIndex] = P[0]
+                    fitResiduals[iSubswathIndex,iSubBlockIndex] = P[1]
+            
+            balancingPower = np.zeros_like(noiseScalingCoeff)
+            boundsPower = np.zeros((13,numberOfAzimuthSubBlock))
+            for i,iswc in enumerate(subswathCenter):
+                for isb in range(numberOfAzimuthSubBlock):
+                    boundsPower[3*i][isb] = 10**((fitSlopes[i][isb] * iswc + fitIntercepts[i][isb])/10.)
+            for i,iswb in enumerate(interswathBounds):
+                for isb in range(numberOfAzimuthSubBlock):
+                    boundsPower[3*i+1][isb] = 10**((fitSlopes[i][isb] * iswb + fitIntercepts[i][isb])/10.)
+                    boundsPower[3*i+2][isb] = 10**((fitSlopes[i+1][isb] * iswb + fitIntercepts[i+1][isb])/10.)
+                    balancingPower[i+1][isb] = boundsPower[3*i+1][isb]-boundsPower[3*i+2][isb]
+            for isb in range(numberOfAzimuthSubBlock):
+                balancingPower[:,isb] = np.cumsum(balancingPower[:,isb])
+                #balancingPower[:,isb] -= balancingPower[2,isb]
+        else:
+            numberOfAzimuthSubBlock = 1
             from noise_scaling_coeff import noise_scaling
-            noiseScalingCoeff,sigma0Adjustment = \
-                noise_scaling(noisePowerPreScalingFactor,IPFver)
-        except:
-            noiseScalingCoeff = np.array([ 1.0 , 1.0 , 1.0 , 1.0 , 1.0 ])
-            sigma0Adjustment = np.array([ 0 , 0 , 0 , 0 , 0 ])
+            noiseScalingCoeff,balancingPower = (
+                    noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
+            balancingPower = np.array(balancingPower)
+            balancingPower -= balancingPower[2]
+        
+        noiseScalingFit = np.zeros((2,5))
+        for iSubswathIndex in range(5):
+            if numberOfAzimuthSubBlock==1:
+                noiseScalingFit[:,iSubswathIndex] = [0,noiseScalingCoeff[iSubswathIndex]]
+            else:
+                '''
+                P = np.polyfit( subBlockCenterIndex,
+                                noiseScalingCoeff[iSubswathIndex,:],
+                                w=1/fitResiduals[iSubswathIndex,:],
+                                deg=1,full='True' )
+                noiseScalingFit[:,iSubswathIndex] = P[0]
+                '''
+                noiseScalingFit[:,iSubswathIndex] = [0,np.median(noiseScalingCoeff[iSubswathIndex])]
+                
+        balancingPowerFit = np.zeros((2,5))
+        for iSubswathIndex in range(5):
+            if numberOfAzimuthSubBlock==1:
+                balancingPowerFit[:,iSubswathIndex] = [0,balancingPower[iSubswathIndex]]
+            else:
+                '''
+                P = np.polyfit( subBlockCenterIndex,
+                                balancingPower[iSubswathIndex,:],
+                                deg=1,full='True' )
+                balancingPowerFit[:,iSubswathIndex] = P[0]
+                '''
+                balancingPowerFit[:,iSubswathIndex] = [0,np.median(balancingPower[iSubswathIndex])]
 
         GRD_sigma0 = GRD_DN**2 / GRD_radCalCoeff**2
-        rawSigma0 = np.nanmean(GRD_sigma0,axis=0)
-        GRD_NEsigma0 = GRD_noise / GRD_radCalCoeff**2 * noisePowerPreScalingFactor
-        rawNEsigma0 = np.nanmean(GRD_NEsigma0,axis=0) / noisePowerPreScalingFactor
-        for subswathIndex in range(5):
-            subswathMask = (GRD_subswathIndex==subswathIndex)
-            GRD_NEsigma0[subswathMask] = ( (   GRD_NEsigma0[subswathMask]
-                                         / GRD_descallopingGain[subswathMask]
-                                         * noiseScalingCoeff[subswathIndex] )
-                                      - sigma0Adjustment[subswathIndex] )
+        rawSigma0 = np.nanmedian(GRD_sigma0,axis=0)
+        GRD_NEsigma0 = ( GRD_noise / GRD_radCalCoeff**2
+                         / GRD_descallopingGain * noisePowerPreScalingFactor )
+        rawNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0) / noisePowerPreScalingFactor
+        for iSubswathIndex in range(5):
+            GRD_NEsigma0[GRD_subswathIndex==iSubswathIndex] -= (
+                np.nanmean(GRD_NEsigma0[GRD_subswathIndex==iSubswathIndex]) )
+            noiseScalingModel = ( noiseScalingFit[0,iSubswathIndex]
+                                 * np.arange(self.numberOfLines)
+                                 + noiseScalingFit[1,iSubswathIndex] )
+            for iAzimuthLine in range(self.numberOfLines):
+                subswathMask = (GRD_subswathIndex[iAzimuthLine,:]==iSubswathIndex)
+                GRD_NEsigma0[iAzimuthLine,subswathMask] *= (
+                    noiseScalingModel[iAzimuthLine] )
+            # CAUTION! IF MEAN NOISE SUBTRACTION MUST BE DONE USING SUBSWATH MEAN.
+            # IF THE SUBTRACTION IS DONE IN EACH AZIMUTH LINE WISE,
+            # THEN DESCALLOPING DOES NOT WORK
+            
+        # FOR HH, USE ESA PROVIDED NOISE VECTOR FOR NOW. APPLY DESCALLOPING.
+        if pol=='HH':
+            GRD_NEsigma0 = ( GRD_noise / GRD_radCalCoeff**2
+                            / GRD_descallopingGain * noisePowerPreScalingFactor )
+            balancingPowerFit = np.zeros((2,5))
+
+        calNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0)
         del GRD_DN, GRD_noise, GRD_radCalCoeff, subswathMask
-        meanNoisePower = np.nanmean(GRD_NEsigma0)
-        GRD_NEsigma0 = GRD_NEsigma0-meanNoisePower
-        calNEsigma0 = np.nanmean(GRD_NEsigma0,axis=0)
-        sigma0Adjustment = sigma0Adjustment+meanNoisePower
+
+        GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0
+        if runMode != 'HHbalancingPower':
+            for iSubswathIndex in range(5):
+                balancingPowerModel = ( balancingPowerFit[0,iSubswathIndex]
+                                        * np.arange(self.numberOfLines)
+                                        + balancingPowerFit[1,iSubswathIndex] )
+                for iAzimuthLine in range(self.numberOfLines):
+                    subswathMask = (GRD_subswathIndex[iAzimuthLine,:]==iSubswathIndex)
+                    GRD_NCsigma0[iAzimuthLine,subswathMask] += (
+                        balancingPowerModel[iAzimuthLine] )
 
         if pol=='HH':
             GRD_angularDependency = (
-                  10**(0.2447 * (GRD_elevationAngle-17.0) /10.) )
-            GRD_NCsigma0 = (GRD_sigma0 - GRD_NEsigma0) * GRD_angularDependency
+                10**(0.271 * (GRD_elevationAngle-30.0) /10.) )
+            GRD_NCsigma0 = GRD_NCsigma0 * GRD_angularDependency
             del GRD_angularDependency
-        elif pol=='HV':
-            GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0
-            #GRD_NCsigma0 = GRD_NCsigma0+10**(-24.5/10.)
 
         GRD_NCsigma0[np.nan_to_num(GRD_NCsigma0)<0] = np.nan
-        calSigma0 = np.nanmean(GRD_NCsigma0,axis=0)
-
-        return 10*np.log10(GRD_NCsigma0)
+        calSigma0 = np.nanmedian(GRD_NCsigma0,axis=0)
+        '''
+        return GRD_sigma0, GRD_NCsigma0, rawSigma0, rawNEsigma0, calSigma0, \
+               calNEsigma0, elevAngle, noisePowerPreScalingFactor, \
+               noiseScalingCoeff, balancingPower, meanRawSigma0, \
+               noiseScalingFit, balancingPowerFit, boundsPower
+        '''
+        return GRD_NCsigma0
