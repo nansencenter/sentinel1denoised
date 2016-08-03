@@ -633,4 +633,4 @@ class Sentinel1Image(Nansat):
                noiseScalingCoeff, balancingPower, meanRawSigma0, \
                noiseScalingFit, balancingPowerFit, boundsPower
         '''
-        return GRD_NCsigma0
+        return 10*np.log10(GRD_NCsigma0)
