@@ -272,7 +272,21 @@ class Sentinel1Image(Nansat):
 
         return azimuthFmRate
 
-    def __getitem__(self, bandID):
+    def add_denoised_band(self, bandName='sigma0_HV'):
+        ''' Remove noise from sigma0 and add array as a band
+        Parameters
+        ----------
+            bandName: str
+                name of the band (e.g. 'sigma0_HH' or 'sigma0_HV')
+        Modifies
+        --------
+            adds band with name 'sigma0_HH_denoised' to self
+        '''
+        denoisedBandArray = self.get_denoised_band(bandName)
+        self.add_band(denoisedBandArray,
+                      parameters={'name': bandName + '_denoised'})
+
+    def get_denoised_band(self, bandID):
         ''' Apply noise and scaloping gain correction to sigma0_HH/HV '''
         band = self.get_GDALRasterBand(bandID)
         name = band.GetMetadata().get('name', '')
@@ -423,8 +437,8 @@ class Sentinel1Image(Nansat):
                                          firstRangeSample:lastRangeSample+1] = (
                           np.ones(lastRangeSample-firstRangeSample+1,dtype=np.int8)
                         * subswathIndex )
-        
-        
+
+
         #runMode = 'HVnoiseScaling'
         #runMode = 'HVbalancingPower'
         #runMode = 'HHbalancingPower'
@@ -457,7 +471,7 @@ class Sentinel1Image(Nansat):
             subBlockEndIndex = np.linspace(minAzimuthIndex,maxAzimuthIndex,
                                            numberOfAzimuthSubBlock+1,dtype='uint')[1:]
             subBlockCenterIndex = (subBlockStartIndex+subBlockEndIndex)/2
-                
+
             for iSubswathIndex in range(5):
                 minRangeIndex = max(bounds['EW'+str(iSubswathIndex+1)]['firstRangeSample'])
                 maxRangeIndex = min(bounds['EW'+str(iSubswathIndex+1)]['lastRangeSample'])
@@ -497,7 +511,7 @@ class Sentinel1Image(Nansat):
                     weightFactor = ((  (weightFactor-np.min(weightFactor))
                                      /(np.max(weightFactor)-np.min(weightFactor)))+1)/2.
                     #weightFactor = np.ones_like(weightFactor)
-                    
+
                     for i,sf in enumerate(scalingFactor):
                         denoisedPower = (sigma0SW-NEsigma0SW*sf)[rangeIndex]
                         if sum(denoisedPower<0) >= len(denoisedPower)*0.3:
@@ -516,8 +530,8 @@ class Sentinel1Image(Nansat):
                     fitSlopes[iSubswathIndex,iSubBlockIndex] = slopes[bestFitIndex]
                     fitIntercepts[iSubswathIndex,iSubBlockIndex] = intercepts[bestFitIndex]
                     fitResiduals[iSubswathIndex,iSubBlockIndex] = residuals[bestFitIndex]
-                    
-                    
+
+
                     sigma0SW = np.nanmean( (GRD_sigma0*subswathMask)
                                             [subBlockStartIndex[iSubBlockIndex]:
                                              subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
@@ -531,7 +545,7 @@ class Sentinel1Image(Nansat):
                                     full='True',w=weightFactor[vM])
                     fitSlopes[iSubswathIndex,iSubBlockIndex],fitIntercepts[iSubswathIndex,iSubBlockIndex] = P[0]
                     fitResiduals[iSubswathIndex,iSubBlockIndex] = P[1]
-            
+
             balancingPower = np.zeros_like(noiseScalingCoeff)
             boundsPower = np.zeros((13,numberOfAzimuthSubBlock))
             for i,iswc in enumerate(subswathCenter):
@@ -552,7 +566,7 @@ class Sentinel1Image(Nansat):
                     noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
             balancingPower = np.array(balancingPower)
             balancingPower -= balancingPower[2]
-        
+
         noiseScalingFit = np.zeros((2,5))
         for iSubswathIndex in range(5):
             if numberOfAzimuthSubBlock==1:
@@ -566,7 +580,7 @@ class Sentinel1Image(Nansat):
                 noiseScalingFit[:,iSubswathIndex] = P[0]
                 '''
                 noiseScalingFit[:,iSubswathIndex] = [0,np.median(noiseScalingCoeff[iSubswathIndex])]
-                
+
         balancingPowerFit = np.zeros((2,5))
         for iSubswathIndex in range(5):
             if numberOfAzimuthSubBlock==1:
@@ -598,7 +612,7 @@ class Sentinel1Image(Nansat):
             # CAUTION! IF MEAN NOISE SUBTRACTION MUST BE DONE USING SUBSWATH MEAN.
             # IF THE SUBTRACTION IS DONE IN EACH AZIMUTH LINE WISE,
             # THEN DESCALLOPING DOES NOT WORK
-            
+
         # FOR HH, USE ESA PROVIDED NOISE VECTOR FOR NOW. APPLY DESCALLOPING.
         if pol=='HH':
             GRD_NEsigma0 = ( GRD_noise / GRD_radCalCoeff**2
