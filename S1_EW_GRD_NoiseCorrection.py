@@ -360,8 +360,8 @@ class Sentinel1Image(Nansat):
             int(np.mean((   np.mean(bounds['EW%d' % idx]['lastRangeSample'])
                           + np.mean(bounds['EW%d' % (idx+1)]['firstRangeSample']) )/2))
             for idx in (np.arange(4)+1) ]
-        
-        
+
+
         ## get GRD_elevationAngle
         # estimate width and height of geolocation grid
         ggWidth = np.nonzero(np.diff(geolocationGridPoint['pixel']) < 0)[0][0] + 1
@@ -379,21 +379,23 @@ class Sentinel1Image(Nansat):
         rbsEA = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggEvationAngles, kx=1, ky=1)
         rbsAT = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggAzimuthTimes, kx=1, ky=1)
         rbsSRT = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggSlantRangeTimes, kx=1, ky=1)
-                                     
+
         # apply RectBivariateSplines to estimate azimuthTime and slantRangeTime
         lines_fullres = np.arange(self.numberOfLines)
         pixels_fullres = np.arange(self.numberOfSamples)
         azimuthTimeAtSubswathCenter = rbsAT(lines_fullres, pixels_fullres[subswathCenter])
         slantRangeTimeAtSubswathCenter = rbsSRT(lines_fullres, pixels_fullres[subswathCenter])
 
-        # apply RectBivariateSpline and estimate angularDependency
+        # angularDependency
         if pol=='HH':
-            GRD_elevationAngle = rbsEA(lines_fullres, pixels_fullres)
-            GRD_angularDependency = (
-                10**(0.271 * (GRD_elevationAngle-17.0) /10.) )
-            elevAngle = np.nanmean(GRD_elevationAngle,axis=0)
-            del GRD_elevationAngle
-        
+            angularDependency = 10**(0.271 * (elevationAngle-30.0) /10.) )
+            GRD_angularDependency = rbsEA(lines_fullres,
+                                          pixels_fullres).astype(np.float32)
+            elevAngle = np.nanmean(GRD_angularDependency, axis=0)
+            GRD_angularDependency -= 17.0
+            GRD_angularDependency /= ( 10. / 0.271)
+            GRD_angularDependency = np.power(10, GRD_angularDependency, GRD_angularDependency)
+
         ## estimate GRD_descallopingGain
         GRD_descallopingGain = np.ones((self.numberOfLines,
                                         self.numberOfSamples),dtype=np.float32) * np.nan
