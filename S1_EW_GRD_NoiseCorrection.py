@@ -388,13 +388,15 @@ class Sentinel1Image(Nansat):
 
         # angularDependency
         if pol=='HH':
-            angularDependency = 10**(0.271 * (elevationAngle-30.0) /10.) )
+            #angularDependency = 10**(0.271 * (elevationAngle-30.0) /10.) )
             GRD_angularDependency = rbsEA(lines_fullres,
                                           pixels_fullres).astype(np.float32)
             elevAngle = np.nanmean(GRD_angularDependency, axis=0)
             GRD_angularDependency -= 17.0
             GRD_angularDependency /= ( 10. / 0.271)
-            GRD_angularDependency = np.power(10, GRD_angularDependency, GRD_angularDependency)
+            GRD_angularDependency = np.power(10,
+                                             GRD_angularDependency,
+                                             GRD_angularDependency).astype(np.float32)
 
         ## estimate GRD_descallopingGain
         GRD_descallopingGain = np.ones((self.numberOfLines,
