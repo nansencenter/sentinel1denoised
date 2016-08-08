@@ -440,32 +440,39 @@ class Sentinel1Image(Nansat):
                 lastRangeSample = int(getValue(iSwathBounds,['lastRangeSample']))
 
                 for iAziLine in range(firstAzimuthLine,lastAzimuthLine+1):
-                    GRD_descallopingGain[iAziLine, firstRangeSample:lastRangeSample+1] = ds_scaled[iAziLine]
-                    GRD_subswathIndex[iAziLine, firstRangeSample:lastRangeSample+1] = subswathIndex
+                    GRD_descallopingGain[iAziLine,
+                      firstRangeSample:lastRangeSample+1] = ds_scaled[iAziLine]
+                    GRD_subswathIndex[iAziLine,
+                            firstRangeSample:lastRangeSample+1] = subswathIndex
 
         # estimate noisePowerPreScalingFactor and GRD_NEsigma0
         noiseLUT = self.get_calibration_LUT(pol, 'noise')
         sigma0LUT = self.get_calibration_LUT(pol, 'calibration')
-        GRD_noise = self.interpolate_lut(noiseLUT, bounds)
+
         GRD_radCalCoeff2 = self.interpolate_lut(sigma0LUT, bounds)**2
-        GRD_DN2 = self['DN_'+pol]**2
-        GRD_DN2[GRD_DN2==0] = np.nan
-        GRD_sigma0 = GRD_DN2 / GRD_radCalCoeff2
+        # sigma0 = DN / radCalCoeff ** 2
+        GRD_sigma0 = self['DN_'+pol]**2
+        GRD_sigma0[GRD_sigma0==0] = np.nan
+        GRD_sigma0 /= GRD_radCalCoeff2
         rawSigma0 = np.nanmedian(GRD_sigma0,axis=0)
-        del GRD_DN2
-        GRD_NEsigma0 = GRD_noise / GRD_radCalCoeff2
-        if 10*np.log10(np.nanmean(GRD_NEsigma0)) < -40:
-            noisePowerPreScalingFactor = 10**(-30.00/10.) / np.nanmean(GRD_NEsigma0)
+
+        # NEsigma0 = noiseLUT / radCalCoeff**2
+        GRD_NEsigma0Orig = self.interpolate_lut(noiseLUT, bounds)
+        GRD_NEsigma0Orig /= GRD_radCalCoeff2
+        del GRD_radCalCoeff2
+
+        GRD_NEsigma0OrigMean = np.nanmean(GRD_NEsigma0Orig)
+        if 10*np.log10(GRD_NEsigma0OrigMean) < -40:
+            noisePowerPreScalingFactor = 10**(-30.00/10.) / GRD_NEsigma0OrigMean
         else:
             noisePowerPreScalingFactor = 1.0
-        GRD_NEsigma0 *= noisePowerPreScalingFactor
+        GRD_NEsigma0 = GRD_NEsigma0Orig * noisePowerPreScalingFactor
 
         #runMode = 'HVnoiseScaling'
         #runMode = 'HVbalancingPower'
         #runMode = 'HHbalancingPower'
         runMode = 'operational'
         numberOfAzimuthSubBlock = 5
-
 
         if runMode != 'operational':
             sideCutN = 15
@@ -607,10 +614,10 @@ class Sentinel1Image(Nansat):
                 balancingPowerFit[:,iSubswathIndex] = [0,np.median(balancingPower[iSubswathIndex])]
 
 
-        GRD_NEsigma0 = ( GRD_noise / GRD_radCalCoeff2
+        GRD_NEsigma0 = ( GRD_NEsigma0Orig
                          / GRD_descallopingGain * noisePowerPreScalingFactor )
         rawNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0) / noisePowerPreScalingFactor
-        del GRD_noise, GRD_radCalCoeff2
+        del GRD_NEsigma0Orig, GRD_descallopingGain
 
         # FOR HH, USE ESA PROVIDED NOISE VECTOR FOR NOW. APPLY DESCALLOPING.
         if pol=='HH':
