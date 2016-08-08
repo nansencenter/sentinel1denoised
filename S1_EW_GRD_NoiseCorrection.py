@@ -185,7 +185,7 @@ class Sentinel1Image(Nansat):
                                             int(getValue(iSwathBounds, [key])))
         return swathBounds
 
-    def interpolate_lut(self, iLUT, bounds):
+    def interpolate_lut(self, iLUT, bounds, dtype=np.float32):
         ''' Interpolate noise or calibration lut to single full resolution grid
         Parameters
         ----------
@@ -199,7 +199,8 @@ class Sentinel1Image(Nansat):
             noiseLUTgrd : ndarray
                 full size noise or calibration matrices for entire image
         '''
-        noiseLUTgrd = np.ones((self.numberOfLines, self.numberOfSamples)) * np.nan
+        noiseLUTgrd = np.ones((self.numberOfLines,
+                               self.numberOfSamples), dtype) * np.nan
 
         epLen = 100    # extrapolation length
         oLUT = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[], 'pixel':[] }
@@ -228,10 +229,10 @@ class Sentinel1Image(Nansat):
                 ptsValue.append(yInterp)
 
             values = np.vstack(ptsValue)
-            spline = RectBivariateSpline( iLUT['lines'][np.nonzero(gli)],
-                                          xInterp, values, kx=1, ky=1 )
+            spline = RectBivariateSpline(iLUT['lines'][np.nonzero(gli)],
+                                         xInterp, values, kx=1, ky=1 )
             ewLUT = spline(range(iLUT['lines'].min(), iLUT['lines'].max()+1),
-                           range(xInterp.min(), xInterp.max()+1))
+                           range(xInterp.min(), xInterp.max()+1)).astype(dtype)
 
             for fal, frs, lal, lrs in zip(bound['firstAzimuthLine'],
                                           bound['firstRangeSample'],
@@ -463,8 +464,8 @@ class Sentinel1Image(Nansat):
         # estimate noisePowerPreScalingFactor and GRD_NEsigma0
         noiseLUT = self.get_calibration_LUT(pol, 'noise')
         sigma0LUT = self.get_calibration_LUT(pol, 'calibration')
-        GRD_noise = self.interpolate_lut(noiseLUT, bounds).astype(np.float32)
-        GRD_radCalCoeff2 = self.interpolate_lut(sigma0LUT, bounds).astype(np.float32)**2
+        GRD_noise = self.interpolate_lut(noiseLUT, bounds)
+        GRD_radCalCoeff2 = self.interpolate_lut(sigma0LUT, bounds)**2
         GRD_DN2 = self['DN_'+pol]**2
         GRD_DN2[GRD_DN2==0] = np.nan
         GRD_sigma0 = GRD_DN2 / GRD_radCalCoeff2
