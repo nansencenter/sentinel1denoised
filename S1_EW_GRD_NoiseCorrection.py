@@ -457,16 +457,15 @@ class Sentinel1Image(Nansat):
         rawSigma0 = np.nanmedian(GRD_sigma0,axis=0)
 
         # NEsigma0 = noiseLUT / radCalCoeff**2
-        GRD_NEsigma0Orig = self.interpolate_lut(noiseLUT, bounds)
-        GRD_NEsigma0Orig /= GRD_radCalCoeff2
+        GRD_NEsigma0 = self.interpolate_lut(noiseLUT, bounds)
+        GRD_NEsigma0 /= GRD_radCalCoeff2
         del GRD_radCalCoeff2
 
-        GRD_NEsigma0OrigMean = np.nanmean(GRD_NEsigma0Orig)
-        if 10*np.log10(GRD_NEsigma0OrigMean) < -40:
-            noisePowerPreScalingFactor = 10**(-30.00/10.) / GRD_NEsigma0OrigMean
+        GRD_NEsigma0Mean = np.nanmean(GRD_NEsigma0)
+        if 10*np.log10(GRD_NEsigma0Mean) < -40:
+            noisePowerPreScalingFactor = 10**(-30.00/10.) / GRD_NEsigma0Mean
         else:
             noisePowerPreScalingFactor = 1.0
-        GRD_NEsigma0 = GRD_NEsigma0Orig * noisePowerPreScalingFactor
 
         #runMode = 'HVnoiseScaling'
         #runMode = 'HVbalancingPower'
@@ -474,7 +473,17 @@ class Sentinel1Image(Nansat):
         runMode = 'operational'
         numberOfAzimuthSubBlock = 5
 
-        if runMode != 'operational':
+        if runMode == 'operational':
+            # load IPFVer specific coefficients
+            numberOfAzimuthSubBlock = 1
+            noiseScalingCoeff,balancingPower = (
+                    noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
+            balancingPower = np.array(balancingPower)
+            balancingPower -= balancingPower[0]
+            GRD_NEsigma0 *= noisePowerPreScalingFactor
+            GRD_NEsigma0 /= GRD_descallopingGain
+            del GRD_descallopingGain
+        else:
             sideCutN = 15
 
             noiseScalingCoeff = np.zeros((5,numberOfAzimuthSubBlock))
@@ -577,14 +586,9 @@ class Sentinel1Image(Nansat):
                 balancingPower[:,isb] = np.cumsum(balancingPower[:,isb])
                 #balancingPower[:,isb] -= balancingPower[2,isb]
 
-        else:
-            # load IPFVer specific coefficients
-            numberOfAzimuthSubBlock = 1
-            noiseScalingCoeff,balancingPower = (
-                    noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
-            balancingPower = np.array(balancingPower)
-            balancingPower -= balancingPower[0]
-
+            GRD_NEsigma0 *= noisePowerPreScalingFactor
+            GRD_NEsigma0 /= GRD_descallopingGain
+            del GRD_descallopingGain
 
         noiseScalingFit = np.zeros((2,5))
         for iSubswathIndex in range(5):
@@ -613,11 +617,7 @@ class Sentinel1Image(Nansat):
                 '''
                 balancingPowerFit[:,iSubswathIndex] = [0,np.median(balancingPower[iSubswathIndex])]
 
-
-        GRD_NEsigma0 = ( GRD_NEsigma0Orig
-                         / GRD_descallopingGain * noisePowerPreScalingFactor )
         rawNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0) / noisePowerPreScalingFactor
-        del GRD_NEsigma0Orig, GRD_descallopingGain
 
         # FOR HH, USE ESA PROVIDED NOISE VECTOR FOR NOW. APPLY DESCALLOPING.
         if pol=='HH':
