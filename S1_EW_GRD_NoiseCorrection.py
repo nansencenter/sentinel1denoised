@@ -185,7 +185,7 @@ class Sentinel1Image(Nansat):
                                             int(getValue(iSwathBounds, [key])))
         return swathBounds
 
-    def interpolate_lut(self, iLUT, bounds):
+    def interpolate_lut(self, iLUT, bounds, dtype=np.float32):
         ''' Interpolate noise or calibration lut to single full resolution grid
         Parameters
         ----------
@@ -199,7 +199,8 @@ class Sentinel1Image(Nansat):
             noiseLUTgrd : ndarray
                 full size noise or calibration matrices for entire image
         '''
-        noiseLUTgrd = np.ones((self.numberOfLines, self.numberOfSamples)) * np.nan
+        noiseLUTgrd = np.ones((self.numberOfLines,
+                               self.numberOfSamples), dtype) * np.nan
 
         epLen = 100    # extrapolation length
         oLUT = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[], 'pixel':[] }
@@ -228,10 +229,10 @@ class Sentinel1Image(Nansat):
                 ptsValue.append(yInterp)
 
             values = np.vstack(ptsValue)
-            spline = RectBivariateSpline( iLUT['lines'][np.nonzero(gli)],
-                                          xInterp, values, kx=1, ky=1 )
+            spline = RectBivariateSpline(iLUT['lines'][np.nonzero(gli)],
+                                         xInterp, values, kx=1, ky=1 )
             ewLUT = spline(range(iLUT['lines'].min(), iLUT['lines'].max()+1),
-                           range(xInterp.min(), xInterp.max()+1))
+                           range(xInterp.min(), xInterp.max()+1)).astype(dtype)
 
             for fal, frs, lal, lrs in zip(bound['firstAzimuthLine'],
                                           bound['firstRangeSample'],
@@ -360,8 +361,8 @@ class Sentinel1Image(Nansat):
             int(np.mean((   np.mean(bounds['EW%d' % idx]['lastRangeSample'])
                           + np.mean(bounds['EW%d' % (idx+1)]['firstRangeSample']) )/2))
             for idx in (np.arange(4)+1) ]
-        
-        
+
+
         ## get GRD_elevationAngle
         # estimate width and height of geolocation grid
         ggWidth = np.nonzero(np.diff(geolocationGridPoint['pixel']) < 0)[0][0] + 1
@@ -379,21 +380,13 @@ class Sentinel1Image(Nansat):
         rbsEA = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggEvationAngles, kx=1, ky=1)
         rbsAT = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggAzimuthTimes, kx=1, ky=1)
         rbsSRT = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggSlantRangeTimes, kx=1, ky=1)
-                                     
+
         # apply RectBivariateSplines to estimate azimuthTime and slantRangeTime
         lines_fullres = np.arange(self.numberOfLines)
         pixels_fullres = np.arange(self.numberOfSamples)
         azimuthTimeAtSubswathCenter = rbsAT(lines_fullres, pixels_fullres[subswathCenter])
         slantRangeTimeAtSubswathCenter = rbsSRT(lines_fullres, pixels_fullres[subswathCenter])
 
-        # apply RectBivariateSpline and estimate angularDependency
-        if pol=='HH':
-            GRD_elevationAngle = rbsEA(lines_fullres, pixels_fullres)
-            GRD_angularDependency = (
-                10**(0.271 * (GRD_elevationAngle-17.0) /10.) )
-            elevAngle = np.nanmean(GRD_elevationAngle,axis=0)
-            del GRD_elevationAngle
-        
         ## estimate GRD_descallopingGain
         GRD_descallopingGain = np.ones((self.numberOfLines,
                                         self.numberOfSamples),dtype=np.float32) * np.nan
@@ -437,6 +430,7 @@ class Sentinel1Image(Nansat):
             eta[abs(eta) > tw / 2] = 0
             antsteer = wavelength / 2 / Vs * kt * eta * 180 / np.pi
             ds = np.interp(antsteer, aziAntElemAng, aziAntElemPat)
+            ds_scaled = 10 ** (ds / 10.)
 
             swathBoundsList = getElem(iSwathMerge,['swathBoundsList'])
             for iSwathBounds in swathBoundsList.getElementsByTagName('swathBounds'):
@@ -447,32 +441,34 @@ class Sentinel1Image(Nansat):
 
                 for iAziLine in range(firstAzimuthLine,lastAzimuthLine+1):
                     GRD_descallopingGain[iAziLine,
-                                            firstRangeSample:lastRangeSample+1] = (
-                          np.ones(lastRangeSample-firstRangeSample+1)
-                        * 10**(ds[iAziLine]/10.))
+                      firstRangeSample:lastRangeSample+1] = ds_scaled[iAziLine]
                     GRD_subswathIndex[iAziLine,
-                                         firstRangeSample:lastRangeSample+1] = (
-                          np.ones(lastRangeSample-firstRangeSample+1,dtype=np.int8)
-                        * subswathIndex )
-
+                            firstRangeSample:lastRangeSample+1] = subswathIndex
 
         # estimate noisePowerPreScalingFactor and GRD_NEsigma0
         noiseLUT = self.get_calibration_LUT(pol, 'noise')
         sigma0LUT = self.get_calibration_LUT(pol, 'calibration')
-        GRD_noise = self.interpolate_lut(noiseLUT, bounds).astype(np.float32)
-        GRD_radCalCoeff2 = self.interpolate_lut(sigma0LUT, bounds).astype(np.float32)**2
-        GRD_DN2 = self['DN_'+pol]**2
-        GRD_DN2[GRD_DN2==0] = np.nan
-        GRD_sigma0 = GRD_DN2 / GRD_radCalCoeff2
+
+        GRD_radCalCoeff2 = self.interpolate_lut(sigma0LUT, bounds)
+        GRD_radCalCoeff2 = np.power(GRD_radCalCoeff2, 2, GRD_radCalCoeff2)
+
+        # sigma0 = DN ** 2 / radCalCoeff ** 2
+        GRD_sigma0 = self['DN_'+pol]
+        GRD_sigma0 = np.power(GRD_sigma0, 2, GRD_sigma0)
+        GRD_sigma0[GRD_sigma0==0] = np.nan
+        GRD_sigma0 /= GRD_radCalCoeff2
         rawSigma0 = np.nanmedian(GRD_sigma0,axis=0)
-        del GRD_DN2
-        GRD_NEsigma0 = GRD_noise / GRD_radCalCoeff2
-        if 10*np.log10(np.nanmean(GRD_NEsigma0)) < -40:
-            noisePowerPreScalingFactor = 10**(-30.00/10.) / np.nanmean(GRD_NEsigma0)
+
+        # NEsigma0 = noiseLUT / radCalCoeff**2 / descallopingGain
+        GRD_NEsigma0 = self.interpolate_lut(noiseLUT, bounds)
+        GRD_NEsigma0 /= GRD_radCalCoeff2
+        del GRD_radCalCoeff2
+
+        NEsigma0Mean = np.nanmean(GRD_NEsigma0)
+        if 10*np.log10(NEsigma0Mean) < -40:
+            noisePowerPreScalingFactor = 10**(-30.00/10.) / NEsigma0Mean
         else:
             noisePowerPreScalingFactor = 1.0
-        GRD_NEsigma0 *= noisePowerPreScalingFactor
-
 
         #runMode = 'HVnoiseScaling'
         #runMode = 'HVbalancingPower'
@@ -480,8 +476,17 @@ class Sentinel1Image(Nansat):
         runMode = 'operational'
         numberOfAzimuthSubBlock = 5
 
-
-        if runMode != 'operational':
+        if runMode == 'operational':
+            # load IPFVer specific coefficients
+            numberOfAzimuthSubBlock = 1
+            noiseScalingCoeff,balancingPower = (
+                    noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
+            balancingPower = np.array(balancingPower)
+            balancingPower -= balancingPower[0]
+            GRD_NEsigma0 *= noisePowerPreScalingFactor
+            GRD_NEsigma0 /= GRD_descallopingGain
+            del GRD_descallopingGain
+        else:
             sideCutN = 15
 
             noiseScalingCoeff = np.zeros((5,numberOfAzimuthSubBlock))
@@ -584,14 +589,9 @@ class Sentinel1Image(Nansat):
                 balancingPower[:,isb] = np.cumsum(balancingPower[:,isb])
                 #balancingPower[:,isb] -= balancingPower[2,isb]
 
-        else:
-            # load IPFVer specific coefficients
-            numberOfAzimuthSubBlock = 1
-            noiseScalingCoeff,balancingPower = (
-                    noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
-            balancingPower = np.array(balancingPower)
-            balancingPower -= balancingPower[0]
-
+            GRD_NEsigma0 *= noisePowerPreScalingFactor
+            GRD_NEsigma0 /= GRD_descallopingGain
+            del GRD_descallopingGain
 
         noiseScalingFit = np.zeros((2,5))
         for iSubswathIndex in range(5):
@@ -620,11 +620,7 @@ class Sentinel1Image(Nansat):
                 '''
                 balancingPowerFit[:,iSubswathIndex] = [0,np.median(balancingPower[iSubswathIndex])]
 
-
-        GRD_NEsigma0 = ( GRD_noise / GRD_radCalCoeff2
-                         / GRD_descallopingGain * noisePowerPreScalingFactor )
         rawNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0) / noisePowerPreScalingFactor
-        del GRD_noise, GRD_radCalCoeff2
 
         # FOR HH, USE ESA PROVIDED NOISE VECTOR FOR NOW. APPLY DESCALLOPING.
         if pol=='HH':
@@ -657,7 +653,17 @@ class Sentinel1Image(Nansat):
                     GRD_NCsigma0[iAzimuthLine,subswathMask] += (
                         balancingPowerModel[iAzimuthLine] )
 
+        # angularDependency
         if pol=='HH':
+            #angularDependency = 10**(0.271 * (elevationAngle-17.0) /10.) )
+            # estimate elevationAngle unsing RectBivariateSpline
+            GRD_angularDependency = rbsEA(lines_fullres,
+                                          pixels_fullres).astype(np.float32)
+            elevAngle = np.nanmean(GRD_angularDependency, axis=0)
+            GRD_angularDependency -= 17.0
+            GRD_angularDependency /= ( 10. / 0.271)
+            GRD_angularDependency = np.power(10, GRD_angularDependency,
+                                                 GRD_angularDependency)
             GRD_NCsigma0 = GRD_NCsigma0 * GRD_angularDependency
             del GRD_angularDependency
 
