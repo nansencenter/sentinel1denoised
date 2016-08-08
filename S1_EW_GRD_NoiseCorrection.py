@@ -387,18 +387,6 @@ class Sentinel1Image(Nansat):
         azimuthTimeAtSubswathCenter = rbsAT(lines_fullres, pixels_fullres[subswathCenter])
         slantRangeTimeAtSubswathCenter = rbsSRT(lines_fullres, pixels_fullres[subswathCenter])
 
-        # angularDependency
-        if pol=='HH':
-            #angularDependency = 10**(0.271 * (elevationAngle-17.0) /10.) )
-            # estimate elevationAngle unsing RectBivariateSpline
-            GRD_angularDependency = rbsEA(lines_fullres,
-                                          pixels_fullres).astype(np.float32)
-            elevAngle = np.nanmean(GRD_angularDependency, axis=0)
-            GRD_angularDependency -= 17.0
-            GRD_angularDependency /= ( 10. / 0.271)
-            GRD_angularDependency = np.power(10, GRD_angularDependency,
-                                                 GRD_angularDependency)
-
         ## estimate GRD_descallopingGain
         GRD_descallopingGain = np.ones((self.numberOfLines,
                                         self.numberOfSamples),dtype=np.float32) * np.nan
@@ -662,7 +650,17 @@ class Sentinel1Image(Nansat):
                     GRD_NCsigma0[iAzimuthLine,subswathMask] += (
                         balancingPowerModel[iAzimuthLine] )
 
+        # angularDependency
         if pol=='HH':
+            #angularDependency = 10**(0.271 * (elevationAngle-17.0) /10.) )
+            # estimate elevationAngle unsing RectBivariateSpline
+            GRD_angularDependency = rbsEA(lines_fullres,
+                                          pixels_fullres).astype(np.float32)
+            elevAngle = np.nanmean(GRD_angularDependency, axis=0)
+            GRD_angularDependency -= 17.0
+            GRD_angularDependency /= ( 10. / 0.271)
+            GRD_angularDependency = np.power(10, GRD_angularDependency,
+                                                 GRD_angularDependency)
             GRD_NCsigma0 = GRD_NCsigma0 * GRD_angularDependency
             del GRD_angularDependency
 
