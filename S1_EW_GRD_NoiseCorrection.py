@@ -449,21 +449,24 @@ class Sentinel1Image(Nansat):
         noiseLUT = self.get_calibration_LUT(pol, 'noise')
         sigma0LUT = self.get_calibration_LUT(pol, 'calibration')
 
-        GRD_radCalCoeff2 = self.interpolate_lut(sigma0LUT, bounds)**2
-        # sigma0 = DN / radCalCoeff ** 2
-        GRD_sigma0 = self['DN_'+pol]**2
+        GRD_radCalCoeff2 = self.interpolate_lut(sigma0LUT, bounds)
+        GRD_radCalCoeff2 = np.power(GRD_radCalCoeff2, 2, GRD_radCalCoeff2)
+
+        # sigma0 = DN ** 2 / radCalCoeff ** 2
+        GRD_sigma0 = self['DN_'+pol]
+        GRD_sigma0 = np.power(GRD_sigma0, 2, GRD_sigma0)
         GRD_sigma0[GRD_sigma0==0] = np.nan
         GRD_sigma0 /= GRD_radCalCoeff2
         rawSigma0 = np.nanmedian(GRD_sigma0,axis=0)
 
-        # NEsigma0 = noiseLUT / radCalCoeff**2
+        # NEsigma0 = noiseLUT / radCalCoeff**2 / descallopingGain
         GRD_NEsigma0 = self.interpolate_lut(noiseLUT, bounds)
         GRD_NEsigma0 /= GRD_radCalCoeff2
         del GRD_radCalCoeff2
 
-        GRD_NEsigma0Mean = np.nanmean(GRD_NEsigma0)
-        if 10*np.log10(GRD_NEsigma0Mean) < -40:
-            noisePowerPreScalingFactor = 10**(-30.00/10.) / GRD_NEsigma0Mean
+        NEsigma0Mean = np.nanmean(GRD_NEsigma0)
+        if 10*np.log10(NEsigma0Mean) < -40:
+            noisePowerPreScalingFactor = 10**(-30.00/10.) / NEsigma0Mean
         else:
             noisePowerPreScalingFactor = 1.0
 
