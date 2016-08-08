@@ -38,7 +38,7 @@ class Sentinel1Image(Nansat):
 
     FOR HH CHANNEL,
         THERMAL NOISE SUBTRACTION + SCALOPING CORRECTION
-        + ANGULAR DEPENDENCY REMOVAL (REFERECE ANGLE = 30.0 DEGREE)
+        + ANGULAR DEPENDENCY REMOVAL (REFERECE ELEVATION ANGLE = 17.0 DEGREE)
     FOR HV CHANNEL,
         THERMAL NOISE SUBTRACTION + SCALOPING CORRECTION
 
@@ -390,7 +390,7 @@ class Sentinel1Image(Nansat):
         if pol=='HH':
             GRD_elevationAngle = rbsEA(lines_fullres, pixels_fullres)
             GRD_angularDependency = (
-                10**(0.271 * (GRD_elevationAngle-30.0) /10.) )
+                10**(0.271 * (GRD_elevationAngle-17.0) /10.) )
             elevAngle = np.nanmean(GRD_elevationAngle,axis=0)
             del GRD_elevationAngle
         
