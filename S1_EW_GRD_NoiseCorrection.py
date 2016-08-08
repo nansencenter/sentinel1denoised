@@ -430,6 +430,7 @@ class Sentinel1Image(Nansat):
             eta[abs(eta) > tw / 2] = 0
             antsteer = wavelength / 2 / Vs * kt * eta * 180 / np.pi
             ds = np.interp(antsteer, aziAntElemAng, aziAntElemPat)
+            ds_scaled = 10 ** (ds / 10.)
 
             swathBoundsList = getElem(iSwathMerge,['swathBoundsList'])
             for iSwathBounds in swathBoundsList.getElementsByTagName('swathBounds'):
@@ -439,15 +440,8 @@ class Sentinel1Image(Nansat):
                 lastRangeSample = int(getValue(iSwathBounds,['lastRangeSample']))
 
                 for iAziLine in range(firstAzimuthLine,lastAzimuthLine+1):
-                    GRD_descallopingGain[iAziLine,
-                                            firstRangeSample:lastRangeSample+1] = (
-                          np.ones(lastRangeSample-firstRangeSample+1)
-                        * 10**(ds[iAziLine]/10.))
-                    GRD_subswathIndex[iAziLine,
-                                         firstRangeSample:lastRangeSample+1] = (
-                          np.ones(lastRangeSample-firstRangeSample+1,dtype=np.int8)
-                        * subswathIndex )
-
+                    GRD_descallopingGain[iAziLine, firstRangeSample:lastRangeSample+1] = ds_scaled[iAziLine]
+                    GRD_subswathIndex[iAziLine, firstRangeSample:lastRangeSample+1] = subswathIndex
 
         # estimate noisePowerPreScalingFactor and GRD_NEsigma0
         noiseLUT = self.get_calibration_LUT(pol, 'noise')
@@ -465,7 +459,6 @@ class Sentinel1Image(Nansat):
         else:
             noisePowerPreScalingFactor = 1.0
         GRD_NEsigma0 *= noisePowerPreScalingFactor
-
 
         #runMode = 'HVnoiseScaling'
         #runMode = 'HVbalancingPower'
