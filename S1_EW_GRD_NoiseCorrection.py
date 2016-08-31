@@ -280,7 +280,7 @@ class Sentinel1Image(Nansat):
 
         return azimuthFmRate
 
-    def add_denoised_band(self, bandName='sigma0_HV'):
+    def add_denoised_band(self, bandName='sigma0_HV', **kwargs):
         ''' Remove noise from sigma0 and add array as a band
         Parameters
         ----------
@@ -290,11 +290,11 @@ class Sentinel1Image(Nansat):
         --------
             adds band with name 'sigma0_HH_denoised' to self
         '''
-        denoisedBandArray = self.get_denoised_band(bandName)
+        denoisedBandArray = self.get_denoised_band(bandName, **kwargs)
         self.add_band(denoisedBandArray,
                       parameters={'name': bandName + '_denoised'})
 
-    def get_denoised_band(self, bandID):
+    def get_denoised_band(self, bandID, **kwargs):
         ''' Apply noise and scaloping gain correction to sigma0_HH/HV '''
         band = self.get_GDALRasterBand(bandID)
         name = band.GetMetadata().get('name', '')
@@ -453,7 +453,7 @@ class Sentinel1Image(Nansat):
         GRD_radCalCoeff2 = np.power(GRD_radCalCoeff2, 2, GRD_radCalCoeff2)
 
         # sigma0 = DN ** 2 / radCalCoeff ** 2
-        GRD_sigma0 = self['DN_'+pol]
+        GRD_sigma0 = self['DN_'+pol].astype('float16')
         GRD_sigma0 = np.power(GRD_sigma0, 2, GRD_sigma0)
         GRD_sigma0[GRD_sigma0==0] = np.nan
         GRD_sigma0 /= GRD_radCalCoeff2
