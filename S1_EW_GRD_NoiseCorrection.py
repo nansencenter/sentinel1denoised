@@ -453,7 +453,7 @@ class Sentinel1Image(Nansat):
         GRD_radCalCoeff2 = np.power(GRD_radCalCoeff2, 2, GRD_radCalCoeff2)
 
         # sigma0 = DN ** 2 / radCalCoeff ** 2
-        GRD_sigma0 = self['DN_'+pol].astype('float16')
+        GRD_sigma0 = self['DN_'+pol].astype('float32')
         GRD_sigma0 = np.power(GRD_sigma0, 2, GRD_sigma0)
         GRD_sigma0[GRD_sigma0==0] = np.nan
         GRD_sigma0 /= GRD_radCalCoeff2
