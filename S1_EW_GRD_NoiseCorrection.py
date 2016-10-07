@@ -41,9 +41,6 @@ class Sentinel1Image(Nansat):
         + ANGULAR DEPENDENCY REMOVAL (REFERECE ELEVATION ANGLE = 17.0 DEGREE)
     FOR HV CHANNEL,
         THERMAL NOISE SUBTRACTION + SCALOPING CORRECTION
-
-    HOW TO COMPUTE EXACT ZERO DOPPLER TIME, ZDT? THIS IS SOMEWHAT UNCLEAR YET.
-    I INTRODUCED zdtBias TO ADJUST IT APPROXIMATELY.
     """
 
     def __init__(self, fileName, mapperName='', logLevel=30):
@@ -279,17 +276,93 @@ class Sentinel1Image(Nansat):
             azimuthFmRate['c2'].append(float(tmpValues[2]))
 
         return azimuthFmRate
+    
+    def get_geolocGridPts(self, pol):
+        ''' Get geolocationGridPoint from XML '''
+        geolocationGridPoint = { 'azimuthTime':[], 'slantRangeTime':[],
+                                 'line':[], 'pixel':[], 'latitude':[],
+                                 'longitude':[], 'elevationAngle':[] }
+        geoGridPtList = getElem(self.annotXML[pol], ['geolocationGridPointList'])
+        geolocationGridPoints = geoGridPtList.getElementsByTagName('geolocationGridPoint')
+        for iGeoGridPt in geolocationGridPoints:
+            geolocationGridPoint['azimuthTime'].append(
+                convertTime2Sec(getValue(iGeoGridPt, ['azimuthTime'])))
+            geolocationGridPoint['slantRangeTime'].append(
+                float(getValue(iGeoGridPt, ['slantRangeTime'])))
+            geolocationGridPoint['line'].append(
+                float(getValue(iGeoGridPt, ['line'])))
+            geolocationGridPoint['pixel'].append(
+                float(getValue(iGeoGridPt, ['pixel'])))
+            geolocationGridPoint['elevationAngle'].append( \
+                float(getValue(iGeoGridPt, ['elevationAngle'])))
+            geolocationGridPoint['latitude'].append( \
+                float(getValue(iGeoGridPt, ['latitude'])))
+            geolocationGridPoint['longitude'].append( \
+                float(getValue(iGeoGridPt, ['longitude'])))
+
+        return geolocationGridPoint
 
     def add_denoised_band(self, bandName='sigma0_HV', **kwargs):
         ''' Remove noise from sigma0 and add array as a band
         Parameters
         ----------
-            bandName: str
-                name of the band (e.g. 'sigma0_HH' or 'sigma0_HV')
+            bandName : str
+                Name of the band (e.g. 'sigma0_HH' or 'sigma0_HV')
+            denoising_algorithm : str, optional
+                Denoising algorithm to apply. Default is 'NERSC'
+                'ESA'
+                    Subtract annotated noise vectors from raw sigma0.
+                    Pixels having negative values are replaced with raw sigma0.
+                    (just like the function 'S-1 Thermal Noise Removal' in ESA SNAP)
+                    All other options ('reference_subswath','add_base_power','fill_voids') 
+                    are ignored in this case.
+                'NERSC'
+                    Subtract scaled and power balanced noise from raw sigma0.
+                    Descalloping functionality is also included.
+            reference_subswath : int, optional
+                Reference subswath number for interswath power balancing.
+                Valid range is 1 to 5. Default is 1.
+            add_base_power : float, optional
+                Add constant power (dB) in order to prevent denoised pixel having negative power.
+                0 for special case of zero noise power in the reference subswath.
+                Default is 0.
+            fill_voids : boolean, optional
+                Fill void pixels (pixels having negative power). Default is 'False'
+                'True'
+                    Replace with its absolute value.
+                'False'
+                    Replace with NaN.
         Modifies
         --------
             adds band with name 'sigma0_HH_denoised' to self
         '''
+        
+        pol = bandName[-2:]
+        for key in kwargs:
+            if key not in [ 'denoising_algorithm' , 'reference_subswath' ,
+                            'add_base_power' , 'fill_voids' ]:
+                raise KeyError("add_denoised_band() got an unexpected keyword argument '%s'" % key)
+        if 'denoising_algorithm' not in kwargs:
+            kwargs['denoising_algorithm'] = 'NERSC'
+        elif kwargs['denoising_algorithm'] not in ['ESA','NERSC']:
+            raise KeyError("kwargs['denoising_algorithm'] got an invalid value '%s'"
+                           % kwargs['denoising_algorithm'])
+        if 'reference_subswath' not in kwargs:
+            kwargs['reference_subswath'] = 1
+        elif np.int(kwargs['reference_subswath']) not in [1,2,3,4,5]:
+            raise KeyError("kwargs['reference_subswath'] got an invalid value '%s'"
+                           % kwargs['reference_subswath'])
+        if 'add_base_power' not in kwargs:
+            kwargs['add_base_power'] = 0
+        elif not np.isreal(np.float(kwargs['add_base_power'])):
+            raise KeyError("kwargs['add_base_power'] got an invalid value '%s'"
+                           % kwargs['add_base_power'])
+        if 'fill_voids' not in kwargs:
+            kwargs['fill_voids'] = False
+        elif kwargs['fill_voids'] not in ['True','False']:
+            raise KeyError("kwargs['fill_voids'] got an invalid value '%s'"
+                           % kwargs['fill_voids'])
+
         denoisedBandArray = self.get_denoised_band(bandName, **kwargs)
         self.add_band(denoisedBandArray,
                       parameters={'name': bandName + '_denoised'})
@@ -322,21 +395,7 @@ class Sentinel1Image(Nansat):
             antennaPatternTime[subswathID].append(
                 convertTime2Sec(getValue(iAntPat, ['azimuthTime'])))
 
-        geolocationGridPoint = { 'azimuthTime':[], 'slantRangeTime':[], \
-                                 'line':[], 'pixel':[], 'elevationAngle':[] }
-        geoGridPtList = getElem(self.annotXML[pol], ['geolocationGridPointList'])
-        geolocationGridPoints = geoGridPtList.getElementsByTagName('geolocationGridPoint')
-        for iGeoGridPt in geolocationGridPoints:
-            geolocationGridPoint['azimuthTime'].append(
-                convertTime2Sec(getValue(iGeoGridPt, ['azimuthTime'])))
-            geolocationGridPoint['slantRangeTime'].append(
-                            float(getValue(iGeoGridPt, ['slantRangeTime'])))
-            geolocationGridPoint['line'].append(
-                            float(getValue(iGeoGridPt, ['line'])))
-            geolocationGridPoint['pixel'].append(
-                            float(getValue(iGeoGridPt, ['pixel'])))
-            geolocationGridPoint['elevationAngle'].append( \
-                            float(getValue(iGeoGridPt, ['elevationAngle'])))
+        geolocationGridPoint = self.get_geolocGridPts(pol)
 
         wavelength = speedOfLight / radarFrequency
         '''
@@ -463,7 +522,7 @@ class Sentinel1Image(Nansat):
         GRD_NEsigma0 = self.interpolate_lut(noiseLUT, bounds)
         GRD_NEsigma0 /= GRD_radCalCoeff2
         del GRD_radCalCoeff2
-
+        
         NEsigma0Mean = np.nanmean(GRD_NEsigma0)
         if 10*np.log10(NEsigma0Mean) < -40:
             noisePowerPreScalingFactor = 10**(-30.00/10.) / NEsigma0Mean
@@ -475,14 +534,21 @@ class Sentinel1Image(Nansat):
         #runMode = 'HHbalancingPower'
         runMode = 'operational'
         numberOfAzimuthSubBlock = 5
+        noiseAdjRefSW = int(kwargs['reference_subswath']) - 1
 
         if runMode == 'operational':
             # load IPFVer specific coefficients
             numberOfAzimuthSubBlock = 1
             noiseScalingCoeff,balancingPower = (
-                    noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
+                noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
+            self.NEsigma0Ref = np.nanmean(
+                GRD_NEsigma0[GRD_subswathIndex==noiseAdjRefSW])
+            if np.float(kwargs['add_base_power'])==0:
+                self.NEsigma0Ref = 0
+            else:
+                self.NEsigma0Ref -= 10**(np.float(kwargs['add_base_power'])/10.)
             balancingPower = np.array(balancingPower)
-            balancingPower -= balancingPower[0]
+            balancingPower -= balancingPower[noiseAdjRefSW]
             GRD_NEsigma0 *= noisePowerPreScalingFactor
             GRD_NEsigma0 /= GRD_descallopingGain
             del GRD_descallopingGain
@@ -587,7 +653,7 @@ class Sentinel1Image(Nansat):
                     balancingPower[i+1][isb] = boundsPower[3*i+1][isb]-boundsPower[3*i+2][isb]
             for isb in range(numberOfAzimuthSubBlock):
                 balancingPower[:,isb] = np.cumsum(balancingPower[:,isb])
-                #balancingPower[:,isb] -= balancingPower[2,isb]
+                balancingPower[:,isb] -= balancingPower[2,isb]
 
             GRD_NEsigma0 *= noisePowerPreScalingFactor
             GRD_NEsigma0 /= GRD_descallopingGain
@@ -623,10 +689,10 @@ class Sentinel1Image(Nansat):
         rawNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0) / noisePowerPreScalingFactor
 
         # FOR HH, USE ESA PROVIDED NOISE VECTOR FOR NOW. APPLY DESCALLOPING.
-        if pol=='HH':
+        if pol == 'HH':
             balancingPowerFit = np.zeros((2,5))
         # FOR HV, USE SCALED AND POWER BALANCED NOISE FIELD. APPLY DESCALLOPING.
-        elif pol=='HV':
+        elif pol == 'HV':
             for iSubswathIndex in range(5):
                 GRD_NEsigma0[GRD_subswathIndex==iSubswathIndex] -= (
                     np.nanmean(GRD_NEsigma0[GRD_subswathIndex==iSubswathIndex]) )
@@ -640,21 +706,32 @@ class Sentinel1Image(Nansat):
             # CAUTION! IF MEAN NOISE SUBTRACTION MUST BE DONE USING SUBSWATH MEAN.
             # IF THE SUBTRACTION IS DONE IN EACH AZIMUTH LINE WISE,
             # THEN DESCALLOPING DOES NOT WORK
+        if kwargs['denoising_algorithm'] == 'ESA':
+            # IN ESA METHOD, NEGATIVE VALUES ARE REPLACED WITH RAW SIGMA0 VALUES
+            GRD_NEsigma0 = ( self.interpolate_lut(noiseLUT, bounds) /
+                             np.power( self.interpolate_lut(sigma0LUT, bounds), 2) )
+            GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0
+            negativeIdx = np.nan_to_num(GRD_NCsigma0) < 0
+            GRD_NCsigma0[negativeIdx] = GRD_sigma0[negativeIdx]
+        elif kwargs['denoising_algorithm'] == 'NERSC':
+            # IN NERSC METHOD, NEGATIVE VALUES ARE REPLACED WITH ABSOLUTE VALUES
+            GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0 - self.NEsigma0Ref
+            if runMode != 'HHbalancingPower':
+                for iSubswathIndex in range(5):
+                    balancingPowerModel = ( balancingPowerFit[0,iSubswathIndex]
+                                            * np.arange(self.numberOfLines)
+                                            + balancingPowerFit[1,iSubswathIndex] )
+                    for iAzimuthLine in range(self.numberOfLines):
+                        subswathMask = (GRD_subswathIndex[iAzimuthLine,:]==iSubswathIndex)
+                        GRD_NCsigma0[iAzimuthLine,subswathMask] += (
+                            balancingPowerModel[iAzimuthLine] )
+            if runMode == 'operational' and kwargs['fill_voids']:
+                GRD_NCsigma0 = np.abs(GRD_NCsigma0)
+
         calNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0)
 
-        GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0
-        if runMode != 'HHbalancingPower':
-            for iSubswathIndex in range(5):
-                balancingPowerModel = ( balancingPowerFit[0,iSubswathIndex]
-                                        * np.arange(self.numberOfLines)
-                                        + balancingPowerFit[1,iSubswathIndex] )
-                for iAzimuthLine in range(self.numberOfLines):
-                    subswathMask = (GRD_subswathIndex[iAzimuthLine,:]==iSubswathIndex)
-                    GRD_NCsigma0[iAzimuthLine,subswathMask] += (
-                        balancingPowerModel[iAzimuthLine] )
-
         # angularDependency
-        if pol=='HH':
+        if pol == 'HH' and kwargs['denoising_algorithm'] != 'ESA':
             #angularDependency = 10**(0.271 * (elevationAngle-17.0) /10.) )
             # estimate elevationAngle unsing RectBivariateSpline
             GRD_angularDependency = rbsEA(lines_fullres,
@@ -667,7 +744,7 @@ class Sentinel1Image(Nansat):
             GRD_NCsigma0 = GRD_NCsigma0 * GRD_angularDependency
             del GRD_angularDependency
 
-        GRD_NCsigma0[np.nan_to_num(GRD_NCsigma0)<0] = np.nan
+        GRD_NCsigma0[np.isnan(GRD_sigma0)] = np.nan
         calSigma0 = np.nanmedian(GRD_NCsigma0,axis=0)
         '''
         return GRD_sigma0, GRD_NCsigma0, rawSigma0, rawNEsigma0, calSigma0, \
