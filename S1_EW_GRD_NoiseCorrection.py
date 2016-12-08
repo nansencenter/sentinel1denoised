@@ -1,15 +1,9 @@
-import os
-import glob
-import warnings
-from xml.dom.minidom import parse, parseString
-
+import os, glob, warnings
 import numpy as np
-from scipy.interpolate import InterpolatedUnivariateSpline
-from scipy.interpolate import RectBivariateSpline
-
+from xml.dom.minidom import parse, parseString
+from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
 from nansat import Nansat
 from nansat.tools import OptionError
-
 from noise_scaling_coeff import noise_scaling
 
 warnings.simplefilter("ignore")
@@ -67,8 +61,8 @@ class Sentinel1Image(Nansat):
             print('\nERROR: IPF version of input image is lower than 2.43! '
                   'Noise correction cannot be achieved by using this function!\n')
             return
-        elif 2.43 <= self.IPFver < 2.60:
-            print('\nWARNING: IPF version of input image is lower than 2.60! '
+        elif 2.43 <= self.IPFver < 2.53:
+            print('\nWARNING: IPF version of input image is lower than 2.53! '
                   'Noise correction result might be wrong!\n')
 
         try:
@@ -328,19 +322,24 @@ class Sentinel1Image(Nansat):
                 Default is 0.
             fill_voids : boolean, optional
                 Fill void pixels (pixels having negative power). Default is 'False'
-                'True'
+                True
                     Replace with its absolute value.
-                'False'
+                False
                     Replace with NaN.
+            dB_conversion : boolean, optional
+                Convert output value to dB scale. Default is 'True'
+                True
+                    Output sigma0 is in dB scale.
+                False
+                    Output sigma0 is in linear scale.
         Modifies
         --------
             adds band with name 'sigma0_HH_denoised' to self
         '''
         
-        pol = bandName[-2:]
         for key in kwargs:
             if key not in [ 'denoising_algorithm' , 'reference_subswath' ,
-                            'add_base_power' , 'fill_voids' ]:
+                            'add_base_power' , 'fill_voids' , 'dB_conversion']:
                 raise KeyError("add_denoised_band() got an unexpected keyword argument '%s'" % key)
         if 'denoising_algorithm' not in kwargs:
             kwargs['denoising_algorithm'] = 'NERSC'
@@ -359,9 +358,14 @@ class Sentinel1Image(Nansat):
                            % kwargs['add_base_power'])
         if 'fill_voids' not in kwargs:
             kwargs['fill_voids'] = False
-        elif kwargs['fill_voids'] not in ['True','False']:
+        elif not isinstance(kwargs['fill_voids'],bool):
             raise KeyError("kwargs['fill_voids'] got an invalid value '%s'"
                            % kwargs['fill_voids'])
+        if 'dB_conversion' not in kwargs:
+            kwargs['dB_conversion'] = True
+        elif not isinstance(kwargs['dB_conversion'],bool):
+            raise KeyError("kwargs['dB_conversion'] got an invalid value '%s'"
+                           % kwargs['dB_conversion'])
 
         denoisedBandArray = self.get_denoised_band(bandName, **kwargs)
         self.add_band(denoisedBandArray,
@@ -497,12 +501,21 @@ class Sentinel1Image(Nansat):
                 firstRangeSample = int(getValue(iSwathBounds,['firstRangeSample']))
                 lastAzimuthLine = int(getValue(iSwathBounds,['lastAzimuthLine']))
                 lastRangeSample = int(getValue(iSwathBounds,['lastRangeSample']))
-
+                
                 for iAziLine in range(firstAzimuthLine,lastAzimuthLine+1):
                     GRD_descallopingGain[iAziLine,
                       firstRangeSample:lastRangeSample+1] = ds_scaled[iAziLine]
                     GRD_subswathIndex[iAziLine,
                             firstRangeSample:lastRangeSample+1] = subswathIndex
+                # for loop can be replaced by following matrix multiplication.
+                '''
+                GRD_descallopingGain[firstAzimuthLine:lastAzimuthLine+1,
+                                     firstRangeSample:lastRangeSample+1] = (
+                    ds_scaled[firstAzimuthLine:lastAzimuthLine+1][:,np.newaxis]
+                    * np.ones((1,lastRangeSample-firstRangeSample+1)) )
+                GRD_subswathIndex[firstAzimuthLine:lastAzimuthLine+1,
+                    firstRangeSample:lastRangeSample+1] = subswathIndex
+                '''
 
         # estimate noisePowerPreScalingFactor and GRD_NEsigma0
         noiseLUT = self.get_calibration_LUT(pol, 'noise')
@@ -541,14 +554,14 @@ class Sentinel1Image(Nansat):
             numberOfAzimuthSubBlock = 1
             noiseScalingCoeff,balancingPower = (
                 noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
-            self.NEsigma0Ref = np.nanmean(
-                GRD_NEsigma0[GRD_subswathIndex==noiseAdjRefSW])
-            if np.float(kwargs['add_base_power'])==0:
-                self.NEsigma0Ref = 0
-            else:
-                self.NEsigma0Ref -= 10**(np.float(kwargs['add_base_power'])/10.)
+            NEsigma0SW3 = np.nanmean(GRD_NEsigma0[GRD_subswathIndex==2])
             balancingPower = np.array(balancingPower)
-            balancingPower -= balancingPower[noiseAdjRefSW]
+            balancingPowerRef = balancingPower[noiseAdjRefSW]
+            if np.float(kwargs['add_base_power'])==0:
+                self.NEsigma0Offset = (
+                    np.nanmean(GRD_NEsigma0[GRD_subswathIndex==noiseAdjRefSW]))
+            else:
+                self.NEsigma0Offset = 10**(np.float(kwargs['add_base_power'])/10.)
             GRD_NEsigma0 *= noisePowerPreScalingFactor
             GRD_NEsigma0 /= GRD_descallopingGain
             del GRD_descallopingGain
@@ -592,7 +605,7 @@ class Sentinel1Image(Nansat):
                     ###NEsigma0SW = NEsigma0SW-np.nanmean(NEsigma0SW[validRangeMask])
                     NEsigma0SW = NEsigma0SW-NEsigma0SW[np.nonzero(NEsigma0SW)].mean()
                     rangeIndex = np.arange(sigma0SW.shape[0])[validRangeMask]
-                    # Consider ddopting Newton method for fast efficient computation
+                    # Consider adopting Newton method for efficient computation
                     if runMode == 'HVnoiseScaling':
                         scalingFactor = np.linspace(0.0,2.0,201)
                     elif np.logical_or(runMode=='HHbalancingPower',runMode=='HVbalancingPower'):
@@ -706,6 +719,8 @@ class Sentinel1Image(Nansat):
             # CAUTION! IF MEAN NOISE SUBTRACTION MUST BE DONE USING SUBSWATH MEAN.
             # IF THE SUBTRACTION IS DONE IN EACH AZIMUTH LINE WISE,
             # THEN DESCALLOPING DOES NOT WORK
+            GRD_NEsigma0 = GRD_NEsigma0 + NEsigma0SW3
+        
         if kwargs['denoising_algorithm'] == 'ESA':
             # IN ESA METHOD, NEGATIVE VALUES ARE REPLACED WITH RAW SIGMA0 VALUES
             GRD_NEsigma0 = ( self.interpolate_lut(noiseLUT, bounds) /
@@ -715,7 +730,6 @@ class Sentinel1Image(Nansat):
             GRD_NCsigma0[negativeIdx] = GRD_sigma0[negativeIdx]
         elif kwargs['denoising_algorithm'] == 'NERSC':
             # IN NERSC METHOD, NEGATIVE VALUES ARE REPLACED WITH ABSOLUTE VALUES
-            GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0 - self.NEsigma0Ref
             if runMode != 'HHbalancingPower':
                 for iSubswathIndex in range(5):
                     balancingPowerModel = ( balancingPowerFit[0,iSubswathIndex]
@@ -723,14 +737,14 @@ class Sentinel1Image(Nansat):
                                             + balancingPowerFit[1,iSubswathIndex] )
                     for iAzimuthLine in range(self.numberOfLines):
                         subswathMask = (GRD_subswathIndex[iAzimuthLine,:]==iSubswathIndex)
-                        GRD_NCsigma0[iAzimuthLine,subswathMask] += (
+                        GRD_NEsigma0[iAzimuthLine,subswathMask] -= (
                             balancingPowerModel[iAzimuthLine] )
+                GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0 + self.NEsigma0Offset
             if runMode == 'operational' and kwargs['fill_voids']:
                 GRD_NCsigma0 = np.abs(GRD_NCsigma0)
 
         calNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0)
 
-        # angularDependency
         if pol == 'HH' and kwargs['denoising_algorithm'] != 'ESA':
             #angularDependency = 10**(0.271 * (elevationAngle-17.0) /10.) )
             # estimate elevationAngle unsing RectBivariateSpline
@@ -752,4 +766,10 @@ class Sentinel1Image(Nansat):
                noiseScalingCoeff, balancingPower, meanRawSigma0, \
                noiseScalingFit, balancingPowerFit, boundsPower
         '''
-        return 10*np.log10(GRD_NCsigma0)
+        if kwargs['dB_conversion']:
+            GRD_NEsigma0 = 10*np.log10(GRD_NEsigma0)
+            GRD_NCsigma0 = 10*np.log10(GRD_NCsigma0)
+
+        self.add_band(GRD_NEsigma0,parameters={'name': 'NEsigma0_' + pol})
+
+        return GRD_NCsigma0
