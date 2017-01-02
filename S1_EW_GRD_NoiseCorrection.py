@@ -52,6 +52,9 @@ class Sentinel1Image(Nansat):
             self.calibXML[pol]['noise'] = parseString(
                                             self.vrt.noiseXMLDict[pol.lower()])
 
+        self.numberOfSamples = int(getValue(self.annotXML[pol], ['numberOfSamples']))
+        self.numberOfLines = int(getValue(self.annotXML[pol], ['numberOfLines']))
+
         manifestXML = parseString(self.vrt.manifestXML)
         self.IPFver = float(manifestXML
                                 .getElementsByTagName('safe:software')[0]
@@ -59,11 +62,12 @@ class Sentinel1Image(Nansat):
 
         if self.IPFver < 2.43:
             print('\nERROR: IPF version of input image is lower than 2.43! '
-                  'Noise correction cannot be achieved by using this function!\n')
+                  'Noise correction cannot be achieved using this module. '
+                  'Denoising vectors in annotation file are not qualified.\n')
             return
         elif 2.43 <= self.IPFver < 2.53:
             print('\nWARNING: IPF version of input image is lower than 2.53! '
-                  'Noise correction result might be wrong!\n')
+                  'Noise correction result can be wrong.\n')
 
         try:
             self.auxcalibXML = parse(glob.glob(
@@ -111,6 +115,17 @@ class Sentinel1Image(Nansat):
         AAEP['azimuthAngle'] = tmpAngle - tmpAngle.mean()
 
         return AAEP
+
+    def get_antennaPatternTime(self, pol):
+    
+        antennaPatternTime = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
+        antPatList = getElem(self.annotXML[pol],['antennaPattern','antennaPatternList'])
+        for iAntPat in antPatList.getElementsByTagName('antennaPattern'):
+            subswathID = getValue(iAntPat, ['swath'])
+            antennaPatternTime[subswathID].append(
+                convertTime2Sec(getValue(iAntPat, ['azimuthTime'])))
+
+        return antennaPatternTime
 
     def get_calibration_LUT(self, pol, iProd):
         ''' Read calibration LUT from XML for a given polarization
@@ -263,11 +278,16 @@ class Sentinel1Image(Nansat):
             azimuthFmRate['azimuthTime'].append(
                 convertTime2Sec(getValue(iAzimuthFmRate, ['azimuthTime'])))
             azimuthFmRate['t0'].append(float(getValue(iAzimuthFmRate,['t0'])))
-            tmpValues = getValue(iAzimuthFmRate,
-                                 ['azimuthFmRatePolynomial']).split(' ')
-            azimuthFmRate['c0'].append(float(tmpValues[0]))
-            azimuthFmRate['c1'].append(float(tmpValues[1]))
-            azimuthFmRate['c2'].append(float(tmpValues[2]))
+            if iAzimuthFmRate.getElementsByTagName('azimuthFmRatePolynomial'):
+                tmpValues = getValue(iAzimuthFmRate,
+                                     ['azimuthFmRatePolynomial']).split(' ')
+                azimuthFmRate['c0'].append(float(tmpValues[0]))
+                azimuthFmRate['c1'].append(float(tmpValues[1]))
+                azimuthFmRate['c2'].append(float(tmpValues[2]))
+            else:
+                azimuthFmRate['c0'].append(float(getValue(iAzimuthFmRate,['c0'])))
+                azimuthFmRate['c1'].append(float(getValue(iAzimuthFmRate,['c1'])))
+                azimuthFmRate['c2'].append(float(getValue(iAzimuthFmRate,['c2'])))
 
         return azimuthFmRate
     
@@ -382,37 +402,25 @@ class Sentinel1Image(Nansat):
         IPFver = self.IPFver
         speedOfLight = 299792458.
         radarFrequency = 5405000454.33435
-        azimuthSteeringRate = { 'EW1': 2.390895448 , 'EW2': 2.811502724, \
-                                'EW3': 2.366195855 , 'EW4': 2.512694636, \
+        azimuthSteeringRate = { 'EW1': 2.390895448 , 'EW2': 2.811502724,
+                                'EW3': 2.366195855 , 'EW4': 2.512694636,
                                 'EW5': 2.122855427                         }
-
-        self.numberOfSamples = int(getValue(self.annotXML[pol], ['numberOfSamples']))
-        self.numberOfLines = int(getValue(self.annotXML[pol], ['numberOfLines']))
 
         orbit = self.get_orbit(pol)
         azimuthFmRate = self.get_azimuthFmRate(pol)
 
-        antennaPatternTime = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
-        antPatList = getElem(self.annotXML[pol],['antennaPattern','antennaPatternList'])
-        for iAntPat in antPatList.getElementsByTagName('antennaPattern'):
-            subswathID = getValue(iAntPat, ['swath'])
-            antennaPatternTime[subswathID].append(
-                convertTime2Sec(getValue(iAntPat, ['azimuthTime'])))
+        antennaPatternTime = self.get_antennaPatternTime(pol)
+        azimuthTimeInterval_GRDM = float(getValue(self.annotXML[pol], ['azimuthTimeInterval']))
+        azimuthTimeInterval_SLC = 1/float(getValue(self.annotXML[pol], ['azimuthFrequency']))
+        burstLength = { 'EW1': 1168 * azimuthTimeInterval_SLC,
+                        'EW2': 1163 * azimuthTimeInterval_SLC,
+                        'EW3': 1174 * azimuthTimeInterval_SLC,
+                        'EW4': 1175 * azimuthTimeInterval_SLC,
+                        'EW5': 1164 * azimuthTimeInterval_SLC  }
 
         geolocationGridPoint = self.get_geolocGridPts(pol)
 
         wavelength = speedOfLight / radarFrequency
-        '''
-        replicaTime = convertTime2Sec(
-                          getValue(self.annotXML[pol],
-                                   ['replicaList','replica','azimuthTime'] ))
-        zdtBias = (replicaTime - antennaPatternTime['EW1'][0]
-                  + np.mean(np.diff(antennaPatternTime['EW1']))/2)
-        '''
-        zeroDopMinusAcqTime = float(getValue(self.annotXML[pol],['zeroDopMinusAcqTime']))
-        zdtBias = np.remainder( zeroDopMinusAcqTime ,
-                               np.median(np.diff(antennaPatternTime['EW1'])) )
-        zdtBias = zdtBias + 0.07
 
         bounds = self.get_swath_bounds(pol)
 
@@ -482,15 +490,18 @@ class Sentinel1Image(Nansat):
                    for loopIdx in range(self.numberOfLines) ])
             kt = ka * ks / (ka - ks)
             tw = np.max(np.diff(antennaPatternTime[subswathID])[1:-1])
-            zdt = np.array(antennaPatternTime[subswathID]) + zdtBias
+            
+            zdt = np.array(antennaPatternTime[subswathID])
+            zdtBias = (burstLength[subswathID]-np.diff(zdt))/2
+            zdt += np.hstack([zdtBias[0], zdtBias])
+            
             if zdt[0] > eta[0]: zdt = np.hstack([zdt[0]-tw, zdt])
             if zdt[-1] < eta[-1]: zdt = np.hstack([zdt,zdt[-1]+tw])
-            for loopIdx in range(len(zdt)):
+            for loopIdx in range(len(zdt)-1):
                 idx = np.nonzero(
-                          np.logical_and((eta > zdt[loopIdx]-tw/2),
-                                         (eta < zdt[loopIdx]+tw/2)))
-                eta[idx] -= zdt[loopIdx]
-            eta[abs(eta) > tw / 2] = 0
+                          np.logical_and((eta >= zdt[loopIdx]),
+                                         (eta < zdt[loopIdx+1])))
+                eta[idx] -= (zdt[loopIdx]+zdt[loopIdx+1])/2
             antsteer = wavelength / 2 / Vs * kt * eta * 180 / np.pi
             ds = np.interp(antsteer, aziAntElemAng, aziAntElemPat)
             ds_scaled = 10 ** (ds / 10.)
@@ -502,20 +513,13 @@ class Sentinel1Image(Nansat):
                 lastAzimuthLine = int(getValue(iSwathBounds,['lastAzimuthLine']))
                 lastRangeSample = int(getValue(iSwathBounds,['lastRangeSample']))
                 
-                for iAziLine in range(firstAzimuthLine,lastAzimuthLine+1):
-                    GRD_descallopingGain[iAziLine,
-                      firstRangeSample:lastRangeSample+1] = ds_scaled[iAziLine]
-                    GRD_subswathIndex[iAziLine,
-                            firstRangeSample:lastRangeSample+1] = subswathIndex
-                # for loop can be replaced by following matrix multiplication.
-                '''
                 GRD_descallopingGain[firstAzimuthLine:lastAzimuthLine+1,
                                      firstRangeSample:lastRangeSample+1] = (
                     ds_scaled[firstAzimuthLine:lastAzimuthLine+1][:,np.newaxis]
                     * np.ones((1,lastRangeSample-firstRangeSample+1)) )
                 GRD_subswathIndex[firstAzimuthLine:lastAzimuthLine+1,
                     firstRangeSample:lastRangeSample+1] = subswathIndex
-                '''
+
 
         # estimate noisePowerPreScalingFactor and GRD_NEsigma0
         noiseLUT = self.get_calibration_LUT(pol, 'noise')
@@ -726,8 +730,9 @@ class Sentinel1Image(Nansat):
             GRD_NEsigma0 = ( self.interpolate_lut(noiseLUT, bounds) /
                              np.power( self.interpolate_lut(sigma0LUT, bounds), 2) )
             GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0
-            negativeIdx = np.nan_to_num(GRD_NCsigma0) < 0
-            GRD_NCsigma0[negativeIdx] = GRD_sigma0[negativeIdx]
+            if runMode == 'operational' and kwargs['fill_voids']:
+                negativeIdx = np.nan_to_num(GRD_NCsigma0) < 0
+                GRD_NCsigma0[negativeIdx] = GRD_sigma0[negativeIdx]
         elif kwargs['denoising_algorithm'] == 'NERSC':
             # IN NERSC METHOD, NEGATIVE VALUES ARE REPLACED WITH ABSOLUTE VALUES
             if runMode != 'HHbalancingPower':
