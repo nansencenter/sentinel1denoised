@@ -1,10 +1,13 @@
+import matplotlib;    matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import os, glob, warnings
 import numpy as np
 from xml.dom.minidom import parse, parseString
 from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
+from scipy.ndimage import convolve
 from nansat import Nansat
 from nansat.tools import OptionError
-from noise_scaling_coeff import noise_scaling
+from denoising_coeff import get_denoising_coeffs
 
 warnings.simplefilter("ignore")
 
@@ -16,9 +19,11 @@ def getElem(elem, tags):
         iElem = iElem.getElementsByTagName(iTag)[0]
     return iElem
 
+
 def getValue(elem, tags):
     ''' Get value of XML subelement based on tags '''
     return getElem(elem, tags).childNodes[0].nodeValue
+
 
 def convertTime2Sec(time):
     iTime = time
@@ -26,16 +31,165 @@ def convertTime2Sec(time):
     secOfDay = float(HHMMSS[0])*3600 + float(HHMMSS[1])*60 + float(HHMMSS[2])
     return secOfDay
 
-class Sentinel1Image(Nansat):
-    """
-    RADIOMETRIC CALIBRATION AND NOISE REMOVAL FOR S-1 GRD PRODUCT
 
-    FOR HH CHANNEL,
-        THERMAL NOISE SUBTRACTION + SCALOPING CORRECTION
-        + ANGULAR DEPENDENCY REMOVAL (REFERECE ELEVATION ANGLE = 17.0 DEGREE)
-    FOR HV CHANNEL,
-        THERMAL NOISE SUBTRACTION + SCALOPING CORRECTION
-    """
+def get_antennaPattern(self, pol):
+
+    antPatList = getElem( self.annotXML[pol],
+                          ['antennaPattern','antennaPatternList'] )
+    antennaPatterns = []
+    for i,iAntPat in enumerate(antPatList.getElementsByTagName('antennaPattern')):
+        antennaPattern = { 'swath':[], 'azimuthTime':[], 'slantRangeTime':[],
+                           'elevationAngle':[], 'elevationPattern':[],
+                           'incidenceAngle':[], 'terrainHeight':[], 'roll':[] }
+        antennaPattern['swath'] = getValue(iAntPat,['swath'])
+        antennaPattern['azimuthTime'] = convertTime2Sec(
+            getValue(iAntPat,['azimuthTime']))
+        antennaPattern['slantRangeTime'] = np.array(
+            getValue(iAntPat,['slantRangeTime']).split(),dtype=np.float64)
+        antennaPattern['elevationAngle'] = np.array(
+            getValue(iAntPat,['elevationAngle']).split(),dtype=np.float64)
+        antennaPattern['elevationPattern'] = np.array(
+            getValue(iAntPat,['elevationPattern']).split(),dtype=np.float64)
+        antennaPattern['incidenceAngle'] = np.array(
+            getValue(iAntPat,['incidenceAngle']).split(),dtype=np.float64)
+        antennaPattern['terrainHeight'] = np.float64(getValue(iAntPat,['terrainHeight']))
+        antennaPattern['roll'] = np.float64(getValue(iAntPat,['roll']))
+        antennaPatterns.append(antennaPattern)
+
+    return antennaPatterns
+
+
+    #anxTime = convertTime2Sec(
+    #    getElem(self.annotXML[pol],['ascendingNodeTime']).childNodes[0].nodeValue
+
+def rollSteeringLaw(inputAnxTime,inputTimeVec):
+
+    h0 = 707714.8
+    h = [8351.5, 8947.0, 23.32, 11.74]
+    phi = [3.1495, -1.5655 , -3.1297, 4.7222]
+    T_orb = (12*24*60*60)/175.
+    w_orb = 2*np.pi/T_orb
+    hgt = np.zeros_like(inputTimeVec)
+    for i,t in enumerate(inputTimeVec):
+        hgt[i] = h0 + sum([ h[j] * np.sin((j+1) * w_orb * (t-inputAnxTime) + phi[j])
+                         for j in range(len(h)) ])
+    hgt_ref = 711700
+    boresight_ref = 29.450
+    alpha_roll = 0.0566
+    
+    return boresight_ref - alpha_roll * (hgt - hgt_ref)/1000.
+
+
+def getLocalScalingParams(inputSigma0,inputNEsigma0,inputSWindex,windowSize):
+    
+    nRowsOrig, nColsOrig = inputSigma0.shape
+    nRowsProc = (nRowsOrig//windowSize+bool(nRowsOrig%windowSize))*windowSize
+    nColsProc = (nColsOrig//windowSize+bool(nColsOrig%windowSize))*windowSize
+    sigma0Chunks = np.ones((nRowsProc,nColsProc))*np.nan
+    sigma0Chunks[:nRowsOrig,:nColsOrig] = inputSigma0.copy()
+    NEsigma0Chunks = np.ones((nRowsProc,nColsProc))*np.nan
+    NEsigma0Chunks[:nRowsOrig,:nColsOrig] = inputNEsigma0.copy()
+    SWindexChunks = np.zeros((nRowsProc,nColsProc))
+    SWindexChunks[:nRowsOrig,:nColsOrig] = inputSWindex.copy()
+    del inputSigma0,inputNEsigma0,inputSWindex
+    
+    sigma0Chunks = [ sigma0Chunks[i*windowSize:(i+1)*windowSize,
+                                  j*windowSize:(j+1)*windowSize]
+                     for (i,j) in np.ndindex(nRowsProc//windowSize,
+                                             nColsProc//windowSize) ]
+    NEsigma0Chunks = [ NEsigma0Chunks[i*windowSize:(i+1)*windowSize,
+                                      j*windowSize:(j+1)*windowSize]
+                       for (i,j) in np.ndindex(nRowsProc//windowSize,
+                                               nColsProc//windowSize) ]
+    SWindexChunks = [ SWindexChunks[i*windowSize:(i+1)*windowSize,
+                                    j*windowSize:(j+1)*windowSize]
+                      for (i,j) in np.ndindex(nRowsProc//windowSize,
+                                              nColsProc//windowSize) ]
+     
+    def subfunc_getLocalScalingParams(sigma0Chunk,NEsigma0Chunk,SWindexChunk):
+        NESZ = np.ones_like(sigma0Chunk)*np.nan
+        SNR = np.ones_like(sigma0Chunk)*np.nan
+        extraScaling = np.ones_like(sigma0Chunk)*np.nan
+        STD = np.ones_like(sigma0Chunk)*np.nan
+        SWindex = np.ones_like(sigma0Chunk)*np.nan
+        uniqueIndices = np.unique(SWindexChunk)
+        uniqueIndices = uniqueIndices[uniqueIndices>0]  # ignore 0
+        for uniqueIndex in uniqueIndices:
+            mask = (SWindexChunk==uniqueIndex) * np.isfinite(sigma0Chunk)
+            nAll = np.double(mask.sum())
+            referencePower = np.sum(sigma0Chunk[mask]-NEsigma0Chunk[mask])
+            noisePower = np.sum(NEsigma0Chunk[mask])
+            alpha = 1.0
+            for j in range(5):
+                denoisedPower = sigma0Chunk[mask]-NEsigma0Chunk[mask]*alpha
+                nNeg = (denoisedPower <0).sum()
+                denoisedPower[denoisedPower <0] = 0
+                alpha += ( (np.sum(denoisedPower)-referencePower)
+                           / noisePower *(nAll/(nAll-nNeg)) )
+            NESZ[mask] = np.mean(NEsigma0Chunk[mask])
+            SNR[mask] = np.mean(sigma0Chunk[mask])/np.mean(NEsigma0Chunk[mask])
+            extraScaling[mask] = alpha
+            STD[mask] = np.nanstd(sigma0Chunk[mask]-NEsigma0Chunk[mask])
+            SWindex[mask] = uniqueIndex
+        NESZ = np.nanmean(NESZ)
+        SNR = np.nanmean(SNR)
+        extraScaling = np.nanmean(extraScaling)
+        STD = np.nanmean(STD)
+        SWindex = np.nanmean(SWindex)
+        return NESZ,SNR,extraScaling,STD,SWindex
+            
+    outputChunks = map(subfunc_getLocalScalingParams,
+                       sigma0Chunks,NEsigma0Chunks,SWindexChunks)
+    del sigma0Chunks,NEsigma0Chunks,SWindexChunks
+
+    outputNESZ = [ tuple[0] for tuple in outputChunks ]
+    outputNESZ = (np.reshape(outputNESZ,
+                      [nRowsProc//windowSize,nColsProc//windowSize])
+                 )[:nRowsOrig//windowSize,:nColsOrig//windowSize]
+    outputSNR = [ tuple[1] for tuple in outputChunks ]
+    outputSNR = (np.reshape(outputSNR,
+                     [nRowsProc//windowSize,nColsProc//windowSize])
+                )[:nRowsOrig//windowSize,:nColsOrig//windowSize]
+    outputExtraScaling = [ tuple[2] for tuple in outputChunks ]
+    outputExtraScaling = (np.reshape(outputExtraScaling,
+                              [nRowsProc//windowSize,nColsProc//windowSize])
+                         )[:nRowsOrig//windowSize,:nColsOrig//windowSize]
+    outputSTD = [ tuple[3] for tuple in outputChunks ]
+    outputSTD = (np.reshape(outputSTD,
+                     [nRowsProc//windowSize,nColsProc//windowSize])
+                )[:nRowsOrig//windowSize,:nColsOrig//windowSize]
+    outputSWindex = [ tuple[4] for tuple in outputChunks ]
+    outputSWindex = (np.reshape(outputSWindex,
+                     [nRowsProc//windowSize,nColsProc//windowSize])
+                    )[:nRowsOrig//windowSize,:nColsOrig//windowSize]
+
+    return outputNESZ,outputSNR,outputExtraScaling,outputSTD,outputSWindex
+
+
+def adaptiveNoiseScaling(
+        inputSigma0,inputNEsigma0,inputSWindex,extraScalingParams,windowSize):
+
+    meanSigma0 = convolve(
+        inputSigma0,np.ones((windowSize,windowSize))/windowSize**2.,mode='constant',cval=0.0)
+    meanNEsigma0 = convolve(
+        inputNEsigma0,np.ones((windowSize,windowSize))/windowSize**2.,mode='constant',cval=0.0)
+    meanSWindex = convolve(
+        inputSWindex,np.ones((windowSize,windowSize))/windowSize**2.,mode='constant',cval=0.0)
+    SNR = 10*np.log10(meanSigma0/meanNEsigma0-1)
+    outputNEsigma0 = inputNEsigma0.copy()
+    
+    for iSW in range(5):
+        interpFtn = InterpolatedUnivariateSpline(
+                        extraScalingParams['SNR_dB'],
+                        extraScalingParams['extraNoiseScalingParams'][iSW], k=3)
+        oIdx = np.isfinite(SNR) * (meanSWindex==iSW+1)
+        yInterp = interpFtn(SNR[oIdx])
+        outputNEsigma0[oIdx] = inputNEsigma0[oIdx] * yInterp
+    
+    return outputNEsigma0
+
+
+class Sentinel1Image(Nansat):
 
     def __init__(self, fileName, mapperName='', logLevel=30):
         ''' Read calibration/annotation XML files and auxiliary XML file '''
@@ -43,22 +197,22 @@ class Sentinel1Image(Nansat):
                          mapperName=mapperName, logLevel=logLevel)
         self.calibXML = {}
         self.annotXML = {}
-        self.auxcalibXML = {}
+        self.auxCalibXML = {}
         for pol in ['HH', 'HV']:
-            self.annotXML[pol] = parseString(self.vrt.annotationXMLDict[pol.lower()])
+            self.annotXML[pol] = parseString(
+                                     self.vrt.annotationXMLDict[pol.lower()])
             self.calibXML[pol] = {}
             self.calibXML[pol]['calibration'] = parseString(
-                                            self.vrt.calXMLDict[pol.lower()])
+                                             self.vrt.calXMLDict[pol.lower()])
             self.calibXML[pol]['noise'] = parseString(
-                                            self.vrt.noiseXMLDict[pol.lower()])
+                                             self.vrt.noiseXMLDict[pol.lower()])
 
-        self.numberOfSamples = int(getValue(self.annotXML[pol], ['numberOfSamples']))
-        self.numberOfLines = int(getValue(self.annotXML[pol], ['numberOfLines']))
+        self.nSamples = int(getValue(self.annotXML[pol], ['numberOfSamples']))
+        self.nLines = int(getValue(self.annotXML[pol], ['numberOfLines']))
 
         manifestXML = parseString(self.vrt.manifestXML)
-        self.IPFver = float(manifestXML
-                                .getElementsByTagName('safe:software')[0]
-                                .attributes['version'].value )
+        self.IPFver = float(manifestXML.getElementsByTagName('safe:software')[0]
+                                .attributes['version'].value)
 
         if self.IPFver < 2.43:
             print('\nERROR: IPF version of input image is lower than 2.43! '
@@ -70,7 +224,7 @@ class Sentinel1Image(Nansat):
                   'Noise correction result can be wrong.\n')
 
         try:
-            self.auxcalibXML = parse(glob.glob(
+            self.auxCalibXML = parse(glob.glob(
                 os.path.join(os.path.dirname(os.path.realpath(__file__)),
                              'S1A_AUX_CAL*.SAFE/data/s1a-aux-cal.xml') )[-1])
         except IndexError:
@@ -78,7 +232,8 @@ class Sentinel1Image(Nansat):
                    It must be in the same directory with this module.\n\
                    You can get it from https://qc.sentinel1.eo.esa.int/aux_cal')
 
-    def get_AAEP(self, pol):
+
+    def get_azimuthAntennaElevationPattern(self, pol):
         ''' Read azimuth antenna elevation pattern from auxiliary XML data
             provided by ESA (https://qc.sentinel1.eo.esa.int/aux_cal)
 
@@ -89,13 +244,14 @@ class Sentinel1Image(Nansat):
 
         Returns
         -------
-        AAEP : dict
+        azimuthAntennaElevationPattern : dict
             EW1, EW2, EW3, EW4, EW5, azimuthAngle - 1D vectors
         '''
 
-        keys = ['EW1', 'EW2', 'EW3', 'EW4', 'EW5', 'azimuthAngle']
-        AAEP = dict([(key,[]) for key in keys])
-        xmldocElem = self.auxcalibXML
+        keys = [ 'EW1', 'EW2', 'EW3', 'EW4', 'EW5',
+                 'azimuthAngle', 'noiseCalFac' ]
+        azimuthAntennaElevationPattern = dict([(key,[]) for key in keys])
+        xmldocElem = self.auxCalibXML
         calibParamsList = getElem(xmldocElem,['calibrationParamsList'])
         for iCalibParams in (calibParamsList
                                 .getElementsByTagName('calibrationParams')):
@@ -104,22 +260,30 @@ class Sentinel1Image(Nansat):
                 values = []
                 polarisation = getValue(iCalibParams,['polarisation'])
                 if polarisation==pol:
-                    angInc = float(getValue(iCalibParams,
-                                 ['azimuthAntennaElementPattern',
-                                  'azimuthAngleIncrement']))
-                    AAEP[subswathID] = np.array(map(float,getValue(iCalibParams,
-                                           ['azimuthAntennaElementPattern',
-                                            'values']).split()))
-                    numberOfPoints = len(AAEP[subswathID])
-        tmpAngle = np.array(range(0,numberOfPoints)) * angInc
-        AAEP['azimuthAngle'] = tmpAngle - tmpAngle.mean()
+                    azimuthAntennaElevationPattern['noiseCalFac'].append(
+                        float(getValue(iCalibParams,
+                                       ['noiseCalibrationFactor'])))
+                    angInc = getValue( iCalibParams,
+                                       ['azimuthAntennaElementPattern',
+                                        'azimuthAngleIncrement'] )
+                    azimuthAntennaElevationPattern[subswathID] = np.array(
+                        map(float,getValue( iCalibParams,
+                                            ['azimuthAntennaElementPattern',
+                                             'values'] ).split()))
+                    numberOfPoints = len(
+                        azimuthAntennaElevationPattern[subswathID])
+        tmpAngle = np.array(range(0,numberOfPoints)) * float(angInc)
+        azimuthAntennaElevationPattern['azimuthAngle'] = (
+            tmpAngle - tmpAngle.mean() )
 
-        return AAEP
+        return azimuthAntennaElevationPattern
+
 
     def get_antennaPatternTime(self, pol):
     
-        antennaPatternTime = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[] }
-        antPatList = getElem(self.annotXML[pol],['antennaPattern','antennaPatternList'])
+        antennaPatternTime = { 'EW1':[],'EW2':[],'EW3':[],'EW4':[],'EW5':[] }
+        antPatList = getElem( self.annotXML[pol],
+                              ['antennaPattern','antennaPatternList'] )
         for iAntPat in antPatList.getElementsByTagName('antennaPattern'):
             subswathID = getValue(iAntPat, ['swath'])
             antennaPatternTime[subswathID].append(
@@ -127,7 +291,8 @@ class Sentinel1Image(Nansat):
 
         return antennaPatternTime
 
-    def get_calibration_LUT(self, pol, iProd):
+
+    def get_calibrationLUT(self, pol, iProd):
         ''' Read calibration LUT from XML for a given polarization
         Parameters
         ----------
@@ -160,7 +325,8 @@ class Sentinel1Image(Nansat):
                     lines = np.array(lines),
                     values = np.array(values))
 
-    def get_swath_bounds(self, pol):
+
+    def get_swathMergeList(self, pol):
         ''' Get list of left right top bottom edges for blocks in each swath
 
         Parameters
@@ -191,6 +357,21 @@ class Sentinel1Image(Nansat):
                                             int(getValue(iSwathBounds, [key])))
         return swathBounds
 
+
+    def gen_subswathIndexMap(self, swathBounds, dtype=np.int8):
+
+        subswathIndexMap =  np.zeros((self.nLines,self.nSamples),dtype)
+        for iSwathIndex in range(1,6):
+            swathBound = swathBounds['EW'+str(iSwathIndex)]
+            for fal, frs, lal, lrs in zip(swathBound['firstAzimuthLine'],
+                                          swathBound['firstRangeSample'],
+                                          swathBound['lastAzimuthLine'],
+                                          swathBound['lastRangeSample']):
+                subswathIndexMap[fal:lal+1,frs:lrs+1] = iSwathIndex
+
+        return subswathIndexMap
+
+
     def interpolate_lut(self, iLUT, bounds, dtype=np.float32):
         ''' Interpolate noise or calibration lut to single full resolution grid
         Parameters
@@ -198,20 +379,20 @@ class Sentinel1Image(Nansat):
         iLUT : dict
             calibration LUT from self.calibration_lut
         bounds : dict
-            boundaries of block in each swath from self.get_swath_bounds
+            boundaries of block in each swath from self.get_swathMergeList
 
         Returns
         -------
             noiseLUTgrd : ndarray
                 full size noise or calibration matrices for entire image
         '''
-        noiseLUTgrd = np.ones((self.numberOfLines,
-                               self.numberOfSamples), dtype) * np.nan
+        noiseLUTgrd = np.ones((self.nLines,
+                               self.nSamples), dtype) * np.nan
 
         epLen = 100    # extrapolation length
         oLUT = { 'EW1':[], 'EW2':[], 'EW3':[], 'EW4':[], 'EW5':[], 'pixel':[] }
-        for iSW in range(5):
-            bound = bounds['EW'+str(iSW+1)]
+        for iSwathIndex in range(1,6):
+            bound = bounds['EW'+str(iSwathIndex)]
             xInterp = np.array(range(min(bound['firstRangeSample'])-epLen,
                                      max(bound['lastRangeSample'])+epLen))
             gli = [   (iLine >= bound['firstAzimuthLine'][0])
@@ -222,12 +403,17 @@ class Sentinel1Image(Nansat):
                 vecPixel = np.array(iLUT['pixels'][iVec])
                 vecValue = np.array(iLUT['values'][iVec])
                 if gli[iVec]:
-                    blockIdx = np.nonzero(iLine >= bound['firstAzimuthLine'])[0][-1]
+                    blockIdx = np.nonzero(
+                                   iLine >= bound['firstAzimuthLine'])[0][-1]
                 else:
+                    gli[iVec] = False
                     continue
                 pix0 = bound['firstRangeSample'][blockIdx]
                 pix1 = bound['lastRangeSample'][blockIdx]
-                gpi = (vecPixel >= pix0) * (vecPixel <= pix1)
+                gpi = (vecPixel >= pix0) * (vecPixel <= pix1) * (vecValue > 0)
+                if gpi.sum()==0:
+                    gli[iVec] = False
+                    continue
                 xPts = vecPixel[gpi]
                 yPts = vecValue[gpi]
                 interpFtn = InterpolatedUnivariateSpline(xPts, yPts, k=3)
@@ -252,7 +438,8 @@ class Sentinel1Image(Nansat):
 
         return noiseLUTgrd
 
-    def get_orbit(self, pol):
+
+    def get_orbitList(self, pol):
         ''' Get orbit parameters from XML '''
         orbit = { 'time':[], 'px':[], 'py':[], 'pz':[],
                              'vx':[], 'vy':[], 'vz':[] }
@@ -269,7 +456,8 @@ class Sentinel1Image(Nansat):
 
         return orbit
 
-    def get_azimuthFmRate(self, pol):
+
+    def get_azimuthFmRateList(self, pol):
         ''' Get azimuth FM rate from XML '''
         azimuthFmRate = { 'azimuthTime':[], 't0':[], 'c0':[], 'c1':[], 'c2':[] }
         azimuthFmRateList = getElem(self.annotXML[pol], ['azimuthFmRateList'])
@@ -285,36 +473,62 @@ class Sentinel1Image(Nansat):
                 azimuthFmRate['c1'].append(float(tmpValues[1]))
                 azimuthFmRate['c2'].append(float(tmpValues[2]))
             else:
-                azimuthFmRate['c0'].append(float(getValue(iAzimuthFmRate,['c0'])))
-                azimuthFmRate['c1'].append(float(getValue(iAzimuthFmRate,['c1'])))
-                azimuthFmRate['c2'].append(float(getValue(iAzimuthFmRate,['c2'])))
+                azimuthFmRate['c0'].append(
+                                        float(getValue(iAzimuthFmRate,['c0'])))
+                azimuthFmRate['c1'].append(
+                                        float(getValue(iAzimuthFmRate,['c1'])))
+                azimuthFmRate['c2'].append(
+                                        float(getValue(iAzimuthFmRate,['c2'])))
 
         return azimuthFmRate
     
-    def get_geolocGridPts(self, pol):
+    
+    def get_geolocationGridPointList(self, pol):
         ''' Get geolocationGridPoint from XML '''
         geolocationGridPoint = { 'azimuthTime':[], 'slantRangeTime':[],
                                  'line':[], 'pixel':[], 'latitude':[],
-                                 'longitude':[], 'elevationAngle':[] }
-        geoGridPtList = getElem(self.annotXML[pol], ['geolocationGridPointList'])
-        geolocationGridPoints = geoGridPtList.getElementsByTagName('geolocationGridPoint')
+                                 'longitude':[], 'height':[],
+                                 'incidenceAngle':[], 'elevationAngle':[] }
+        geoGridPtList = getElem(self.annotXML[pol],
+                                ['geolocationGridPointList'])
+        geolocationGridPoints = (
+            geoGridPtList.getElementsByTagName('geolocationGridPoint'))
         for iGeoGridPt in geolocationGridPoints:
             geolocationGridPoint['azimuthTime'].append(
-                convertTime2Sec(getValue(iGeoGridPt, ['azimuthTime'])))
+                convertTime2Sec(getValue(iGeoGridPt,['azimuthTime'])))
             geolocationGridPoint['slantRangeTime'].append(
-                float(getValue(iGeoGridPt, ['slantRangeTime'])))
+                float(getValue(iGeoGridPt,['slantRangeTime'])))
             geolocationGridPoint['line'].append(
-                float(getValue(iGeoGridPt, ['line'])))
+                float(getValue(iGeoGridPt,['line'])))
             geolocationGridPoint['pixel'].append(
-                float(getValue(iGeoGridPt, ['pixel'])))
-            geolocationGridPoint['elevationAngle'].append( \
-                float(getValue(iGeoGridPt, ['elevationAngle'])))
+                float(getValue(iGeoGridPt,['pixel'])))
             geolocationGridPoint['latitude'].append( \
-                float(getValue(iGeoGridPt, ['latitude'])))
+                float(getValue(iGeoGridPt,['latitude'])))
             geolocationGridPoint['longitude'].append( \
-                float(getValue(iGeoGridPt, ['longitude'])))
+                float(getValue(iGeoGridPt,['longitude'])))
+            geolocationGridPoint['height'].append( \
+                float(getValue(iGeoGridPt,['height'])))
+            geolocationGridPoint['incidenceAngle'].append( \
+                float(getValue(iGeoGridPt,['incidenceAngle'])))
+            geolocationGridPoint['elevationAngle'].append( \
+                float(getValue(iGeoGridPt,['elevationAngle'])))
 
         return geolocationGridPoint
+    
+    
+    def get_focusedBurstLength(self,pol):
+        ''' Get full burst length in focused zero-Doppler azimuth time '''
+        aziTimeIntevalSLC = 1./float(getValue(self.annotXML[pol],['azimuthFrequency']))
+        inputDimsList = getElem(self.annotXML[pol],['inputDimensionsList'])
+        inputDims = inputDimsList.getElementsByTagName('inputDimensions')
+        nL = np.array([ int(getValue(inputDims[i],['numberOfInputLines'])) for i in range(5) ])
+        nB = max([ d for d in range(1,max(nL)/1000) if sum(nL%d)==0 ])
+        burstLength = {}
+        for i in range(5):
+            burstLength['EW%s'%(i+1)] = nL[i]/nB*aziTimeIntevalSLC
+
+        return burstLength
+
 
     def add_denoised_band(self, bandName='sigma0_HV', **kwargs):
         ''' Remove noise from sigma0 and add array as a band
@@ -322,459 +536,691 @@ class Sentinel1Image(Nansat):
         ----------
             bandName : str
                 Name of the band (e.g. 'sigma0_HH' or 'sigma0_HV')
-            denoising_algorithm : str, optional
-                Denoising algorithm to apply. Default is 'NERSC'
+            denoAlg : str, optional
+                Denoising algorithm to apply. 
+                *** Default is 'NERSC'
                 'ESA'
-                    Subtract annotated noise vectors from raw sigma0.
-                    Pixels having negative values are replaced with raw sigma0.
-                    (just like the function 'S-1 Thermal Noise Removal' in ESA SNAP)
-                    All other options ('reference_subswath','add_base_power','fill_voids') 
-                    are ignored in this case.
+                    Subtract annotated noise vectors from ESA-provided sigma0.
                 'NERSC'
                     Subtract scaled and power balanced noise from raw sigma0.
                     Descalloping functionality is also included.
-            reference_subswath : int, optional
-                Reference subswath number for interswath power balancing.
-                Valid range is 1 to 5. Default is 1.
-            add_base_power : float, optional
-                Add constant power (dB) in order to prevent denoised pixel having negative power.
-                0 for special case of zero noise power in the reference subswath.
-                Default is 0.
-            fill_voids : boolean, optional
-                Fill void pixels (pixels having negative power). Default is 'False'
-                True
-                    Replace with its absolute value.
-                False
-                    Replace with NaN.
-            dB_conversion : boolean, optional
-                Convert output value to dB scale. Default is 'True'
-                True
-                    Output sigma0 is in dB scale.
-                False
-                    Output sigma0 is in linear scale.
+            addPow : float or str, optional
+                Add constant power (dB) in order to prevent denoised pixel 
+                having negative power. 0 is special case for not adding power, 
+                but adjusting the derived noise field have the same total power 
+                with ESA-provided noise field. If the input is not a number but 
+                one of 'EW['1-5]', the mean noise power of the specific subswath
+                will be added to the denoised power. 'EW0' is for whole image.
+                *** Default is '0'.
+            clipDirtyPx : boolean, optional
+                Remove dirty pixels in near-range.
+                (see "Masking No-value Pixels on GRD Products generated by the 
+                Sentinel-1 ESA IPF", OI-MPC-OTH-0243-S1-Border-Masking-MPCS-916)
+                *** Default is 'True'
+            adaptNoiSc : boolean, optional
+                adaptive noise scaling based on local SNR
+                *** Default is 'True'
+            angDepCor : boolean, optional
+                Compensate angular dependency from HH-pol image
+                *** Default is 'True'
+            fillVoid : boolean, optional
+                Fill void pixels (pixels having negative power). 
+                *** Default is 'False'
+            dBconv : boolean, optional
+                Convert output value to dB scale. 
+                *** Default is 'True'
+            expMode : str, optional
+                Experimental mode for computing denoising coefficients. 
+                *** Default is 'False'
+                'False'
+                    skip denoising coefficient estimation
+                'noiseScaling'
+                    noise scaling coefficient estimation
+                'powerBalancing'
+                    interswath power balancing coefficient estimation
+                'localScaling'
+                    local SNR dependent extra scaling coefficient estimation
+
         Modifies
         --------
             adds band with name 'sigma0_HH_denoised' to self
         '''
         
-        for key in kwargs:
-            if key not in [ 'denoising_algorithm' , 'reference_subswath' ,
-                            'add_base_power' , 'fill_voids' , 'dB_conversion']:
-                raise KeyError("add_denoised_band() got an unexpected keyword argument '%s'" % key)
-        if 'denoising_algorithm' not in kwargs:
-            kwargs['denoising_algorithm'] = 'NERSC'
-        elif kwargs['denoising_algorithm'] not in ['ESA','NERSC']:
-            raise KeyError("kwargs['denoising_algorithm'] got an invalid value '%s'"
-                           % kwargs['denoising_algorithm'])
-        if 'reference_subswath' not in kwargs:
-            kwargs['reference_subswath'] = 1
-        elif np.int(kwargs['reference_subswath']) not in [1,2,3,4,5]:
-            raise KeyError("kwargs['reference_subswath'] got an invalid value '%s'"
-                           % kwargs['reference_subswath'])
-        if 'add_base_power' not in kwargs:
-            kwargs['add_base_power'] = 0
-        elif not np.isreal(np.float(kwargs['add_base_power'])):
-            raise KeyError("kwargs['add_base_power'] got an invalid value '%s'"
-                           % kwargs['add_base_power'])
-        if 'fill_voids' not in kwargs:
-            kwargs['fill_voids'] = False
-        elif not isinstance(kwargs['fill_voids'],bool):
-            raise KeyError("kwargs['fill_voids'] got an invalid value '%s'"
-                           % kwargs['fill_voids'])
-        if 'dB_conversion' not in kwargs:
-            kwargs['dB_conversion'] = True
-        elif not isinstance(kwargs['dB_conversion'],bool):
-            raise KeyError("kwargs['dB_conversion'] got an invalid value '%s'"
-                           % kwargs['dB_conversion'])
+        
+        #for key in kwargs:
+        #    if key not in [ 'denoAlg' , 'addPow' , 'clipDirtyPx' , 'adaptNoiSc'
+        #                   , 'angDepCor' , 'fillVoid' , 'dBconv' , 'expMode' ]:
+        #        raise KeyError("add_denoised_band() got an unexpected keyword argument '%s'" % key)
+        if 'denoAlg' not in kwargs:
+            kwargs['denoAlg'] = 'NERSC'
+        elif kwargs['denoAlg'] not in ['ESA','NERSC']:
+            raise KeyError("kwargs['denoAlg'] got an invalid value '%s'"
+                           % kwargs['denoAlg'])
+        if 'addPow' not in kwargs:
+            kwargs['addPow'] = 0
+        elif ( not np.isreal(kwargs['addPow']) and
+               kwargs['addPow'] not in ['EW0','EW1','EW2','EW3','EW4','EW5'] ):
+            raise KeyError("kwargs['addPow'] got an invalid value '%s'"
+                           % kwargs['addPow'])
+        if 'clipDirtyPx' not in kwargs:
+            kwargs['clipDirtyPx'] = True
+        elif not isinstance(kwargs['clipDirtyPx'],bool):
+            raise KeyError("kwargs['clipDirtyPx'] got an invalid value '%s'"
+                           % kwargs['clipDirtyPx'])
+        if 'adaptNoiSc' not in kwargs:
+            kwargs['adaptNoiSc'] = True
+        elif not isinstance(kwargs['adaptNoiSc'],bool):
+            raise KeyError("kwargs['adaptNoiSc'] got an invalid value '%s'"
+                           % kwargs['adaptNoiSc'])
+        if 'angDepCor' not in kwargs:
+            kwargs['angDepCor'] = True
+        elif not isinstance(kwargs['angDepCor'],bool):
+            raise KeyError("kwargs['angDepCor'] got an invalid value '%s'"
+                           % kwargs['angDepCor'])
+        if 'fillVoid' not in kwargs:
+            kwargs['fillVoid'] = False
+        elif not isinstance(kwargs['fillVoid'],bool):
+            raise KeyError("kwargs['fillVoid'] got an invalid value '%s'"
+                           % kwargs['fillVoid'])
+        if 'dBconv' not in kwargs:
+            kwargs['dBconv'] = True
+        elif not isinstance(kwargs['dBconv'],bool):
+            raise KeyError("kwargs['dBconv'] got an invalid value '%s'"
+                           % kwargs['dBconv'])
+        if 'expMode' not in kwargs:
+            kwargs['expMode'] = False
+        elif kwargs['expMode'] not in ['noiseScaling','powerBalancing','localScaling']:
+            raise KeyError("kwargs['expMode'] got an invalid value '%s'"
+                           % kwargs['expMode'])
+        if 'development' not in kwargs:
+            kwargs['development'] = False
+        elif not isinstance(kwargs['development'],bool):
+            raise KeyError("kwargs['development'] got an invalid value '%s'"
+                           % kwargs['development'])
+        
+        if kwargs['expMode']:
+            kwargs['denoAlg'] = 'NERSC'
+            denoisedBandArray = self.get_denoised_band(bandName, **kwargs)
+        else:
+            denoisedBandArray = self.get_denoised_band(bandName, **kwargs)
+            self.add_band(denoisedBandArray,
+                          parameters={'name': bandName + '_denoised'})
 
-        denoisedBandArray = self.get_denoised_band(bandName, **kwargs)
-        self.add_band(denoisedBandArray,
-                      parameters={'name': bandName + '_denoised'})
 
     def get_denoised_band(self, bandID, **kwargs):
         ''' Apply noise and scaloping gain correction to sigma0_HH/HV '''
         band = self.get_GDALRasterBand(bandID)
-        name = band.GetMetadata().get('name', '')
+        name = band.GetMetadata().get('name','')
         if name not in ['sigma0_HH', 'sigma0_HV', 'sigma0HH_', 'sigma0HV_']:
             return Nansat.__getitem__(self, bandID)
         pol = name[-2:]
 
-        IPFver = self.IPFver
-        speedOfLight = 299792458.
-        radarFrequency = 5405000454.33435
-        azimuthSteeringRate = { 'EW1': 2.390895448 , 'EW2': 2.811502724,
-                                'EW3': 2.366195855 , 'EW4': 2.512694636,
-                                'EW5': 2.122855427                         }
-
-        orbit = self.get_orbit(pol)
-        azimuthFmRate = self.get_azimuthFmRate(pol)
-
-        antennaPatternTime = self.get_antennaPatternTime(pol)
-        azimuthTimeInterval_GRDM = float(getValue(self.annotXML[pol], ['azimuthTimeInterval']))
-        azimuthTimeInterval_SLC = 1/float(getValue(self.annotXML[pol], ['azimuthFrequency']))
-        burstLength = { 'EW1': 1168 * azimuthTimeInterval_SLC,
-                        'EW2': 1163 * azimuthTimeInterval_SLC,
-                        'EW3': 1174 * azimuthTimeInterval_SLC,
-                        'EW4': 1175 * azimuthTimeInterval_SLC,
-                        'EW5': 1164 * azimuthTimeInterval_SLC  }
-
-        geolocationGridPoint = self.get_geolocGridPts(pol)
-
-        wavelength = speedOfLight / radarFrequency
-
-        bounds = self.get_swath_bounds(pol)
-
-        subswathCenter = [
-            int(np.mean((   np.array(bounds['EW%d' % idx]['firstRangeSample'])
-                          + np.array(bounds['EW%d' % idx]['lastRangeSample']) )/2))
-            for idx in (np.arange(5)+1) ]
-        interswathBounds = [
-            int(np.mean((   np.mean(bounds['EW%d' % idx]['lastRangeSample'])
-                          + np.mean(bounds['EW%d' % (idx+1)]['firstRangeSample']) )/2))
-            for idx in (np.arange(4)+1) ]
-
-
-        ## get GRD_elevationAngle
+        # import geolocation grid point list from annotation XML
+        ggPts = self.get_geolocationGridPointList(pol)
+    
         # estimate width and height of geolocation grid
-        ggWidth = np.nonzero(np.diff(geolocationGridPoint['pixel']) < 0)[0][0] + 1
-        ggHeight = (len(geolocationGridPoint['pixel']) / ggWidth)
-        # reshape geolocationGridPoint to 2D grids
-        ggPixels = np.reshape(geolocationGridPoint['pixel'], (ggHeight, ggWidth))
-        ggLines = np.reshape(geolocationGridPoint['line'], (ggHeight, ggWidth))
-        ggEvationAngles = np.reshape(geolocationGridPoint['elevationAngle'],
-                                     (ggHeight, ggWidth))
-        ggAzimuthTimes = np.reshape(geolocationGridPoint['azimuthTime'],
-                                     (ggHeight, ggWidth))
-        ggSlantRangeTimes = np.reshape(geolocationGridPoint['slantRangeTime'],
-                                     (ggHeight, ggWidth))
-        # train RectBivariateSplines
-        rbsEA = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggEvationAngles, kx=1, ky=1)
-        rbsAT = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggAzimuthTimes, kx=1, ky=1)
-        rbsSRT = RectBivariateSpline(ggLines[:,0], ggPixels[0], ggSlantRangeTimes, kx=1, ky=1)
-
-        # apply RectBivariateSplines to estimate azimuthTime and slantRangeTime
-        lines_fullres = np.arange(self.numberOfLines)
-        pixels_fullres = np.arange(self.numberOfSamples)
-        azimuthTimeAtSubswathCenter = rbsAT(lines_fullres, pixels_fullres[subswathCenter])
-        slantRangeTimeAtSubswathCenter = rbsSRT(lines_fullres, pixels_fullres[subswathCenter])
-
-        ## estimate GRD_descallopingGain
-        GRD_descallopingGain = np.ones((self.numberOfLines,
-                                        self.numberOfSamples),dtype=np.float32) * np.nan
-        GRD_subswathIndex = np.ones((self.numberOfLines,
-                                     self.numberOfSamples),dtype=np.int8) * (-1)
-        AAEP = self.get_AAEP(pol)
-        swathMergeList = getElem(self.annotXML[pol], ['swathMergeList'])
-        for iSwathMerge in swathMergeList.getElementsByTagName('swathMerge'):
-            subswathID = getValue(iSwathMerge, ['swath'])
-            subswathIndex = int(subswathID[-1])-1
-            aziAntElemPat = AAEP[subswathID]
-            aziAntElemAng = AAEP['azimuthAngle']
-
-            kw = azimuthSteeringRate[subswathID] * np.pi / 180
-            eta = np.copy(azimuthTimeAtSubswathCenter[:, subswathIndex])
-            tau = np.copy(slantRangeTimeAtSubswathCenter[:, subswathIndex])
-            Vs = np.linalg.norm( np.array(
-                    [ np.interp(eta,orbit['time'],orbit['vx']),
-                      np.interp(eta,orbit['time'],orbit['vy']),
-                      np.interp(eta,orbit['time'],orbit['vz'])  ]), axis=0)
-            ks = 2 * Vs / wavelength * kw
-            ka = np.array(
-                 [ np.interp( eta[loopIdx],
-                              azimuthFmRate['azimuthTime'],
-                              (   azimuthFmRate['c0']
-                                + azimuthFmRate['c1']
-                                  * (tau[loopIdx]-azimuthFmRate['t0'])**1
-                                + azimuthFmRate['c2']
-                                  * (tau[loopIdx]-azimuthFmRate['t0'])**2 ) )
-                   for loopIdx in range(self.numberOfLines) ])
-            kt = ka * ks / (ka - ks)
-            tw = np.max(np.diff(antennaPatternTime[subswathID])[1:-1])
+        # normaly width is fixed to 21
+        # and height depends on the length of the image product
+        ggWidth = np.nonzero(np.diff(ggPts['pixel']) < 0)[0][0] + 1
+        ggHeight = len(ggPts['pixel'])/ggWidth
             
-            zdt = np.array(antennaPatternTime[subswathID])
-            zdtBias = (burstLength[subswathID]-np.diff(zdt))/2
-            zdt += np.hstack([zdtBias[0], zdtBias])
+        # reshape ggPts to 2D grids
+        ggAziT = np.reshape(ggPts['azimuthTime'],(ggHeight, ggWidth))
+        ggRngT = np.reshape(ggPts['slantRangeTime'],(ggHeight, ggWidth))
+        ggLine = np.reshape(ggPts['line'],(ggHeight,ggWidth))
+        ggPixel = np.reshape(ggPts['pixel'],(ggHeight,ggWidth))
+        ggIncAng = np.reshape(ggPts['incidenceAngle'],(ggHeight,ggWidth))
+        ggElevAng = np.reshape(ggPts['elevationAngle'],(ggHeight,ggWidth))
             
-            if zdt[0] > eta[0]: zdt = np.hstack([zdt[0]-tw, zdt])
-            if zdt[-1] < eta[-1]: zdt = np.hstack([zdt,zdt[-1]+tw])
-            for loopIdx in range(len(zdt)-1):
-                idx = np.nonzero(
-                          np.logical_and((eta >= zdt[loopIdx]),
-                                         (eta < zdt[loopIdx+1])))
-                eta[idx] -= (zdt[loopIdx]+zdt[loopIdx+1])/2
-            antsteer = wavelength / 2 / Vs * kt * eta * 180 / np.pi
-            ds = np.interp(antsteer, aziAntElemAng, aziAntElemPat)
-            ds_scaled = 10 ** (ds / 10.)
+        # train RectBivariateSplines. spline order is fixed to 1
+        rbsAT = RectBivariateSpline(
+                    ggLine[:,0], ggPixel[0], ggAziT, kx=1, ky=1)
+        rbsRT = RectBivariateSpline(
+                    ggLine[:,0], ggPixel[0], ggRngT, kx=1, ky=1)
+        rbsIA = RectBivariateSpline(
+                    ggLine[:,0], ggPixel[0], ggIncAng, kx=1, ky=1)
+        rbsEA = RectBivariateSpline(
+                    ggLine[:,0], ggPixel[0], ggElevAng, kx=1, ky=1)
 
-            swathBoundsList = getElem(iSwathMerge,['swathBoundsList'])
-            for iSwathBounds in swathBoundsList.getElementsByTagName('swathBounds'):
-                firstAzimuthLine = int(getValue(iSwathBounds,['firstAzimuthLine']))
-                firstRangeSample = int(getValue(iSwathBounds,['firstRangeSample']))
-                lastAzimuthLine = int(getValue(iSwathBounds,['lastAzimuthLine']))
-                lastRangeSample = int(getValue(iSwathBounds,['lastRangeSample']))
-                
-                GRD_descallopingGain[firstAzimuthLine:lastAzimuthLine+1,
-                                     firstRangeSample:lastRangeSample+1] = (
-                    ds_scaled[firstAzimuthLine:lastAzimuthLine+1][:,np.newaxis]
-                    * np.ones((1,lastRangeSample-firstRangeSample+1)) )
-                GRD_subswathIndex[firstAzimuthLine:lastAzimuthLine+1,
-                    firstRangeSample:lastRangeSample+1] = subswathIndex
-
-
-        # estimate noisePowerPreScalingFactor and GRD_NEsigma0
-        noiseLUT = self.get_calibration_LUT(pol, 'noise')
-        sigma0LUT = self.get_calibration_LUT(pol, 'calibration')
-
-        GRD_radCalCoeff2 = self.interpolate_lut(sigma0LUT, bounds)
-        GRD_radCalCoeff2 = np.power(GRD_radCalCoeff2, 2, GRD_radCalCoeff2)
-
-        # sigma0 = DN ** 2 / radCalCoeff ** 2
-        GRD_sigma0 = self['DN_'+pol].astype('float32')
-        GRD_sigma0 = np.power(GRD_sigma0, 2, GRD_sigma0)
+        # import swathMergeList
+        bounds = self.get_swathMergeList(pol)
+        
+        # generate subswath index map
+        GRD_SWindex = self.gen_subswathIndexMap(bounds)
+        
+        # import LUTs and convert them into full resolution grid
+        sigma0LUT = self.get_calibrationLUT(pol,'calibration')
+        GRD_radCalCoeff = np.power(self.interpolate_lut(sigma0LUT,bounds),2)
+        noiseLUT = self.get_calibrationLUT(pol, 'noise')
+        GRD_NEsigma0 = self.interpolate_lut(noiseLUT, bounds) / GRD_radCalCoeff
+        
+        # import DN and convert into sigma0
+        GRD_sigma0 = np.power(self['DN_'+pol].astype('float32'),2) / GRD_radCalCoeff
         GRD_sigma0[GRD_sigma0==0] = np.nan
-        GRD_sigma0 /= GRD_radCalCoeff2
-        rawSigma0 = np.nanmedian(GRD_sigma0,axis=0)
-
-        # NEsigma0 = noiseLUT / radCalCoeff**2 / descallopingGain
-        GRD_NEsigma0 = self.interpolate_lut(noiseLUT, bounds)
-        GRD_NEsigma0 /= GRD_radCalCoeff2
-        del GRD_radCalCoeff2
+        del GRD_radCalCoeff
         
-        NEsigma0Mean = np.nanmean(GRD_NEsigma0)
-        if 10*np.log10(NEsigma0Mean) < -40:
-            noisePowerPreScalingFactor = 10**(-30.00/10.) / NEsigma0Mean
-        else:
-            noisePowerPreScalingFactor = 1.0
-
-        #runMode = 'HVnoiseScaling'
-        #runMode = 'HVbalancingPower'
-        #runMode = 'HHbalancingPower'
-        runMode = 'operational'
-        numberOfAzimuthSubBlock = 5
-        noiseAdjRefSW = int(kwargs['reference_subswath']) - 1
-
-        if runMode == 'operational':
-            # load IPFVer specific coefficients
-            numberOfAzimuthSubBlock = 1
-            noiseScalingCoeff,balancingPower = (
-                noise_scaling(noisePowerPreScalingFactor,pol,IPFver) )
-            NEsigma0SW3 = np.nanmean(GRD_NEsigma0[GRD_subswathIndex==2])
-            balancingPower = np.array(balancingPower)
-            balancingPowerRef = balancingPower[noiseAdjRefSW]
-            if np.float(kwargs['add_base_power'])==0:
-                self.NEsigma0Offset = (
-                    np.nanmean(GRD_NEsigma0[GRD_subswathIndex==noiseAdjRefSW]))
+        # remove near range dirty pixels
+        if kwargs['clipDirtyPx']:
+            bufSize = 300
+            if pol=='HH':
+                GRD_sigma0[np.where(GRD_sigma0[:,:bufSize]-GRD_NEsigma0[:,:bufSize]<0)] = np.nan
             else:
-                self.NEsigma0Offset = 10**(np.float(kwargs['add_base_power'])/10.)
-            GRD_NEsigma0 *= noisePowerPreScalingFactor
-            GRD_NEsigma0 /= GRD_descallopingGain
-            del GRD_descallopingGain
-        else:
-            sideCutN = 15
-
-            noiseScalingCoeff = np.zeros((5,numberOfAzimuthSubBlock))
-            fitSlopes = np.zeros((5,numberOfAzimuthSubBlock))
-            fitIntercepts = np.zeros((5,numberOfAzimuthSubBlock))
-            fitResiduals = np.zeros((5,numberOfAzimuthSubBlock))
-            meanRawSigma0 = np.zeros((5,numberOfAzimuthSubBlock))
-            minAzimuthIndex = max([min(bounds['EW'+str(i+1)]['firstAzimuthLine']) for i in range(5)])
-            maxAzimuthIndex = min([max(bounds['EW'+str(i+1)]['lastAzimuthLine']) for i in range(5)])
-            subBlockStartIndex = np.linspace(minAzimuthIndex,maxAzimuthIndex,
-                                             numberOfAzimuthSubBlock+1,dtype='uint')[:-1]
-            subBlockEndIndex = np.linspace(minAzimuthIndex,maxAzimuthIndex,
-                                           numberOfAzimuthSubBlock+1,dtype='uint')[1:]
-            subBlockCenterIndex = (subBlockStartIndex+subBlockEndIndex)/2
-
-            for iSubswathIndex in range(5):
-                minRangeIndex = max(bounds['EW'+str(iSubswathIndex+1)]['firstRangeSample'])
-                maxRangeIndex = min(bounds['EW'+str(iSubswathIndex+1)]['lastRangeSample'])
-                subswathMask = (GRD_subswathIndex==iSubswathIndex)
-                validRangeMask = np.logical_and(
-                    np.logical_and( np.arange(self.numberOfSamples)>=(minRangeIndex+sideCutN),
-                                    np.arange(self.numberOfSamples)<=(maxRangeIndex-sideCutN) ),
-                    10*np.log10(np.nanmin(GRD_sigma0,axis=0))>=-40.)
-                if sum(validRangeMask) < 0.5*(maxRangeIndex-minRangeIndex):
-                    validRangeMask = np.logical_and(
-                        np.arange(self.numberOfSamples)>=(minRangeIndex+sideCutN),
-                        np.arange(self.numberOfSamples)<=(maxRangeIndex-sideCutN) )
-
-                for iSubBlockIndex in range(numberOfAzimuthSubBlock):
-                    sigma0SW = np.nanmedian( (GRD_sigma0*subswathMask)
-                                             [subBlockStartIndex[iSubBlockIndex]:
-                                              subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
-                    meanRawSigma0[iSubswathIndex,iSubBlockIndex] = np.nanmean(sigma0SW[validRangeMask])
-                    NEsigma0SW = np.nanmedian( (GRD_NEsigma0/GRD_descallopingGain*subswathMask)
-                                               [subBlockStartIndex[iSubBlockIndex]:
-                                                subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
-                    ###NEsigma0SW = NEsigma0SW-np.nanmean(NEsigma0SW[validRangeMask])
-                    NEsigma0SW = NEsigma0SW-NEsigma0SW[np.nonzero(NEsigma0SW)].mean()
-                    rangeIndex = np.arange(sigma0SW.shape[0])[validRangeMask]
-                    # Consider adopting Newton method for efficient computation
-                    if runMode == 'HVnoiseScaling':
-                        scalingFactor = np.linspace(0.0,2.0,201)
-                    elif np.logical_or(runMode=='HHbalancingPower',runMode=='HVbalancingPower'):
-                        scalingFactor = np.array([
-                            noise_scaling(noisePowerPreScalingFactor,pol,IPFver)[0][iSubswathIndex],
-                            noise_scaling(noisePowerPreScalingFactor,pol,IPFver)[0][iSubswathIndex] ])
-                    slopes = np.zeros_like(scalingFactor)
-                    intercepts = np.zeros_like(scalingFactor)
-                    residuals = np.zeros_like(scalingFactor)
-                    weightFactor = NEsigma0SW[rangeIndex]
-                    weightFactor = ((  (weightFactor-np.min(weightFactor))
-                                     /(np.max(weightFactor)-np.min(weightFactor)))+1)/2.
-                    #weightFactor = np.ones_like(weightFactor)
-
-                    for i,sf in enumerate(scalingFactor):
-                        denoisedPower = (sigma0SW-NEsigma0SW*sf)[rangeIndex]
-                        if sum(denoisedPower<0) >= len(denoisedPower)*0.3:
-                            residuals[i] = +np.inf
-                            continue
-                        else:
-                            denoisedPower = 10*np.log10(denoisedPower)
-                            vM = np.isfinite(denoisedPower)
-                            P = np.polyfit( rangeIndex[vM],denoisedPower[vM],deg=1,
-                                            full='True',w=weightFactor[vM])
-                            slopes[i], intercepts[i] = P[0]
-                            residuals[i] = P[1]
-
-                    bestFitIndex = np.where(residuals==min(residuals))[0][0]
-                    noiseScalingCoeff[iSubswathIndex,iSubBlockIndex] = scalingFactor[bestFitIndex]
-                    fitSlopes[iSubswathIndex,iSubBlockIndex] = slopes[bestFitIndex]
-                    fitIntercepts[iSubswathIndex,iSubBlockIndex] = intercepts[bestFitIndex]
-                    fitResiduals[iSubswathIndex,iSubBlockIndex] = residuals[bestFitIndex]
-
-
-                    sigma0SW = np.nanmean( (GRD_sigma0*subswathMask)
-                                            [subBlockStartIndex[iSubBlockIndex]:
-                                             subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
-                    NEsigma0SW = np.nanmean( (GRD_NEsigma0/GRD_descallopingGain*subswathMask)
-                                              [subBlockStartIndex[iSubBlockIndex]:
-                                               subBlockEndIndex[iSubBlockIndex]+1],axis=0 )
-                    NEsigma0SW = NEsigma0SW-NEsigma0SW[np.nonzero(NEsigma0SW)].mean()
-                    denoisedPower = 10*np.log10((sigma0SW-NEsigma0SW*scalingFactor[bestFitIndex])[rangeIndex])
-                    vM = np.isfinite(denoisedPower)
-                    P = np.polyfit( rangeIndex[vM],denoisedPower[vM],deg=1,
-                                    full='True',w=weightFactor[vM])
-                    fitSlopes[iSubswathIndex,iSubBlockIndex],fitIntercepts[iSubswathIndex,iSubBlockIndex] = P[0]
-                    fitResiduals[iSubswathIndex,iSubBlockIndex] = P[1]
-
-            balancingPower = np.zeros_like(noiseScalingCoeff)
-            boundsPower = np.zeros((13,numberOfAzimuthSubBlock))
-            for i,iswc in enumerate(subswathCenter):
-                for isb in range(numberOfAzimuthSubBlock):
-                    boundsPower[3*i][isb] = 10**((fitSlopes[i][isb] * iswc + fitIntercepts[i][isb])/10.)
-            for i,iswb in enumerate(interswathBounds):
-                for isb in range(numberOfAzimuthSubBlock):
-                    boundsPower[3*i+1][isb] = 10**((fitSlopes[i][isb] * iswb + fitIntercepts[i][isb])/10.)
-                    boundsPower[3*i+2][isb] = 10**((fitSlopes[i+1][isb] * iswb + fitIntercepts[i+1][isb])/10.)
-                    balancingPower[i+1][isb] = boundsPower[3*i+1][isb]-boundsPower[3*i+2][isb]
-            for isb in range(numberOfAzimuthSubBlock):
-                balancingPower[:,isb] = np.cumsum(balancingPower[:,isb])
-                balancingPower[:,isb] -= balancingPower[2,isb]
-
-            GRD_NEsigma0 *= noisePowerPreScalingFactor
-            GRD_NEsigma0 /= GRD_descallopingGain
-            del GRD_descallopingGain
-
-        noiseScalingFit = np.zeros((2,5))
-        for iSubswathIndex in range(5):
-            if numberOfAzimuthSubBlock==1:
-                noiseScalingFit[:,iSubswathIndex] = [0,noiseScalingCoeff[iSubswathIndex]]
-            else:
-                '''
-                P = np.polyfit( subBlockCenterIndex,
-                                noiseScalingCoeff[iSubswathIndex,:],
-                                w=1/fitResiduals[iSubswathIndex,:],
-                                deg=1,full='True' )
-                noiseScalingFit[:,iSubswathIndex] = P[0]
-                '''
-                noiseScalingFit[:,iSubswathIndex] = [0,np.median(noiseScalingCoeff[iSubswathIndex])]
-
-        balancingPowerFit = np.zeros((2,5))
-        for iSubswathIndex in range(5):
-            if numberOfAzimuthSubBlock==1:
-                balancingPowerFit[:,iSubswathIndex] = [0,balancingPower[iSubswathIndex]]
-            else:
-                '''
-                P = np.polyfit( subBlockCenterIndex,
-                                balancingPower[iSubswathIndex,:],
-                                deg=1,full='True' )
-                balancingPowerFit[:,iSubswathIndex] = P[0]
-                '''
-                balancingPowerFit[:,iSubswathIndex] = [0,np.median(balancingPower[iSubswathIndex])]
-
-        rawNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0) / noisePowerPreScalingFactor
-
-        # FOR HH, USE ESA PROVIDED NOISE VECTOR FOR NOW. APPLY DESCALLOPING.
-        if pol == 'HH':
-            balancingPowerFit = np.zeros((2,5))
-        # FOR HV, USE SCALED AND POWER BALANCED NOISE FIELD. APPLY DESCALLOPING.
-        elif pol == 'HV':
-            for iSubswathIndex in range(5):
-                GRD_NEsigma0[GRD_subswathIndex==iSubswathIndex] -= (
-                    np.nanmean(GRD_NEsigma0[GRD_subswathIndex==iSubswathIndex]) )
-                noiseScalingModel = ( noiseScalingFit[0,iSubswathIndex]
-                                     * np.arange(self.numberOfLines)
-                                     + noiseScalingFit[1,iSubswathIndex] )
-                for iAzimuthLine in range(self.numberOfLines):
-                    subswathMask = (GRD_subswathIndex[iAzimuthLine,:]==iSubswathIndex)
-                    GRD_NEsigma0[iAzimuthLine,subswathMask] *= (
-                        noiseScalingModel[iAzimuthLine] )
-            # CAUTION! IF MEAN NOISE SUBTRACTION MUST BE DONE USING SUBSWATH MEAN.
-            # IF THE SUBTRACTION IS DONE IN EACH AZIMUTH LINE WISE,
-            # THEN DESCALLOPING DOES NOT WORK
-            GRD_NEsigma0 = GRD_NEsigma0 + NEsigma0SW3
+                rc_HH = np.power(self.interpolate_lut(self.get_calibrationLUT('HH','calibration'),bounds),2)
+                s0_HH = np.power(self['DN_HH'].astype('float32'),2) / rc_HH
+                n0_HH = self.interpolate_lut(self.get_calibrationLUT('HH','noise'), bounds) / rc_HH
+                GRD_sigma0[np.where(s0_HH[:,:bufSize]-n0_HH[:,:bufSize]<0)] = np.nan
+                del rc_HH, s0_HH, n0_HH
         
-        if kwargs['denoising_algorithm'] == 'ESA':
-            # IN ESA METHOD, NEGATIVE VALUES ARE REPLACED WITH RAW SIGMA0 VALUES
-            GRD_NEsigma0 = ( self.interpolate_lut(noiseLUT, bounds) /
-                             np.power( self.interpolate_lut(sigma0LUT, bounds), 2) )
-            GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0
-            if runMode == 'operational' and kwargs['fill_voids']:
-                negativeIdx = np.nan_to_num(GRD_NCsigma0) < 0
-                GRD_NCsigma0[negativeIdx] = GRD_sigma0[negativeIdx]
-        elif kwargs['denoising_algorithm'] == 'NERSC':
-            # IN NERSC METHOD, NEGATIVE VALUES ARE REPLACED WITH ABSOLUTE VALUES
-            if runMode != 'HHbalancingPower':
-                for iSubswathIndex in range(5):
-                    balancingPowerModel = ( balancingPowerFit[0,iSubswathIndex]
-                                            * np.arange(self.numberOfLines)
-                                            + balancingPowerFit[1,iSubswathIndex] )
-                    for iAzimuthLine in range(self.numberOfLines):
-                        subswathMask = (GRD_subswathIndex[iAzimuthLine,:]==iSubswathIndex)
-                        GRD_NEsigma0[iAzimuthLine,subswathMask] -= (
-                            balancingPowerModel[iAzimuthLine] )
-                GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0 + self.NEsigma0Offset
-            if runMode == 'operational' and kwargs['fill_voids']:
-                GRD_NCsigma0 = np.abs(GRD_NCsigma0)
+        # denoising using original ESA-provided noise vectors
+        if kwargs['denoAlg']=='ESA':
+            
+            # add-up power
+            if kwargs['addPow'] in ['EW1','EW2','EW3','EW4','EW5']:
+                mSW = (GRD_SWindex==int(kwargs['addPow'][-1]))
+                NEsigma0Offset = np.nanmean(GRD_NEsigma0[mSW])
+            elif kwargs['addPow']=='EW0':
+                mSW = (GRD_SWindex!=0)
+                NEsigma0Offset = np.nanmean(GRD_NEsigma0[mSW])
+            elif kwargs['addPow']==0:
+                NEsigma0Offset = 0
+            else:
+                NEsigma0Offset = 10**(kwargs['addPow']/10.)
+            
+            GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0 + NEsigma0Offset
+        
+        # NERSC denoising method
+        elif kwargs['denoAlg']=='NERSC':
+        
+            # set constantant system values
+            speedOfLight = 299792458.
+            radarFrequency = 5405000454.33435
+            wavelength = speedOfLight / radarFrequency
+            antennaSteeringRate = { 'EW1': 2.390895448 , 'EW2': 2.811502724,
+                                    'EW3': 2.366195855 , 'EW4': 2.512694636,
+                                    'EW5': 2.122855427                       }
+            
+            # import orbit vector list from annotation XML
+            orbitVec = self.get_orbitList(pol)
+            
+            # import azimuth frequency modulation rate list from annotation XML
+            aziFmR = self.get_azimuthFmRateList(pol)
+            
+            # import azimuth time of antenna pattern list from annotation XML
+            # these time correspond to burst start time
+            antPatT = self.get_antennaPatternTime(pol)
+            
+            # full burst lenth in focused azimuth time
+            burstLength = self.get_focusedBurstLength(pol)
+            
+            # calculate mean subswath boundaries and centers
+            # odd: subswath edges,  even: subswath centers
+            meanSWbounds = np.zeros(11)
+            for i in range(1,6):
+                meanSWbounds[i*2-1] = np.where(GRD_SWindex==i)[1].mean()
+                meanSWbounds[i*2] = 2*meanSWbounds[i*2-1]-meanSWbounds[i*2-2]
+            meanSWbounds = np.round(meanSWbounds).tolist()
+            
+            # apply RectBivariateSplines to get full resolution grid
+            aziTatSWcenter = rbsAT(np.arange(self.nLines),
+                                   np.arange(self.nSamples)[meanSWbounds[1::2]])
+            rngTatSWcenter = rbsRT(np.arange(self.nLines),
+                                   np.arange(self.nSamples)[meanSWbounds[1::2]])
 
-        calNEsigma0 = np.nanmedian(GRD_NEsigma0,axis=0)
 
-        if pol == 'HH' and kwargs['denoising_algorithm'] != 'ESA':
-            #angularDependency = 10**(0.271 * (elevationAngle-17.0) /10.) )
-            # estimate elevationAngle unsing RectBivariateSpline
-            GRD_angularDependency = rbsEA(lines_fullres,
-                                          pixels_fullres).astype(np.float32)
-            elevAngle = np.nanmean(GRD_angularDependency, axis=0)
-            GRD_angularDependency -= 17.0
-            GRD_angularDependency /= ( 10. / 0.271)
-            GRD_angularDependency = np.power(10, GRD_angularDependency,
-                                                 GRD_angularDependency)
-            GRD_NCsigma0 = GRD_NCsigma0 * GRD_angularDependency
-            del GRD_angularDependency
+            #####   COMPUTE DESCALLOPING GAIN
 
-        GRD_NCsigma0[np.isnan(GRD_sigma0)] = np.nan
-        calSigma0 = np.nanmedian(GRD_NCsigma0,axis=0)
-        '''
-        return GRD_sigma0, GRD_NCsigma0, rawSigma0, rawNEsigma0, calSigma0, \
-               calNEsigma0, elevAngle, noisePowerPreScalingFactor, \
-               noiseScalingCoeff, balancingPower, meanRawSigma0, \
-               noiseScalingFit, balancingPowerFit, boundsPower
-        '''
-        if kwargs['dB_conversion']:
+            # prepare empty array
+            GRD_dsGain = np.ones((self.nLines,self.nSamples),dtype=np.float32)
+            # import azimuth antenna elevation pattern from
+            # auxiliary calibration XML file, which is available from
+            # https://qc.sentinel1.eo.esa.int
+            AAEP = self.get_azimuthAntennaElevationPattern(pol)
+            
+            # compute descalloping gain for each subswath
+            for iSW in range(1,6):
+                
+                # load azimuth antenna element patterns for given subswath
+                SWid = 'EW%d' % iSW
+                aziAntElemPat = AAEP[SWid]
+                aziAntElemAng = AAEP['azimuthAngle']
+                
+                # antenna steering rate
+                kw = antennaSteeringRate[SWid] * np.pi / 180
+                
+                # azimuth time at subswath center
+                eta = np.copy(aziTatSWcenter[:,iSW-1])
+                
+                # slant range time at subswath center
+                tau = np.copy(rngTatSWcenter[:,iSW-1])
+                
+                # satellite velocity at subswath center
+                Vs = np.linalg.norm( np.array(
+                        [ np.interp(eta,orbitVec['time'],orbitVec['vx']),
+                          np.interp(eta,orbitVec['time'],orbitVec['vy']),
+                          np.interp(eta,orbitVec['time'],orbitVec['vz'])  ]),
+                                     axis=0 )
+                                     
+                # Doppler rate introduced by the scanning of the antenna
+                ks = 2 * Vs / wavelength * kw
+                
+                # Doppler rate of point target signal
+                ka = np.array( [ np.interp( eta[i], aziFmR['azimuthTime'],
+                                  (   aziFmR['c0']
+                                    + aziFmR['c1']*(tau[i]-aziFmR['t0'])**1
+                                    + aziFmR['c2']*(tau[i]-aziFmR['t0'])**2 ) )
+                       for i in range(self.nLines) ])
+                       
+                # combined Doppler rate (net effect)
+                kt = ka * ks / (ka - ks)
+                
+                # mean burst length in time
+                tw = np.max(np.diff(antPatT[SWid])[1:-1])
+                
+                # zero-Doppler azimuth time at each burst start
+                zdt = np.array(antPatT[SWid])
+                
+                # time difference between
+                # full burst in SLC and merged/clipped burst in GRDM
+                zdtBias = (burstLength[SWid]-np.diff(zdt))/2
+                
+                # time correction
+                zdt += np.hstack([zdtBias[0], zdtBias])
+                
+                # if antenna pattern time list does not cover full image,
+                # add more sample points using mean burst length tw
+                if zdt[0] > eta[0]: zdt = np.hstack([zdt[0]-tw, zdt])
+                if zdt[-1] < eta[-1]: zdt = np.hstack([zdt,zdt[-1]+tw])
+                
+                # wrap azimuth time to burst length
+                for i in range(len(zdt)-1):
+                    idx = np.nonzero( np.logical_and( (eta >= zdt[i]),
+                                                      (eta < zdt[i+1]) ) )
+                    eta[idx] -= (zdt[i]+zdt[i+1])/2
+                
+                # compute antenna steering angle for each burst time
+                antSteerAng = wavelength / 2 / Vs * kt * eta * 180 / np.pi
+                
+                # compute scalloping gain for each burst time
+                dsLog = np.interp(antSteerAng, aziAntElemAng, aziAntElemPat)
+                
+                # convert scale (log to linear)
+                dsLin = 10 ** (dsLog / 10.)
+                
+                # assign computed descalloping gain into each subswath
+                mSW = (GRD_SWindex==iSW)
+                GRD_dsGain[mSW] = (
+                    dsLin[:,np.newaxis]*np.ones(self.nSamples))[mSW]
+                del mSW
+
+
+            #####   APPLY PRE-SCALING AND DE-SCALLOPING
+            
+            # get pre-scaling factors
+            if 10*np.log10(np.nanmean(GRD_NEsigma0)) < -40:
+                # denoising vectors not qualified. pre-scaling required.
+                preScaling = np.array(AAEP['noiseCalFac'])*(1087**2)
+                # scalloping seems to be already applied in given noise vectors
+                GRD_dsGain = np.ones(GRD_dsGain.shape)
+            else:
+                preScaling = [1.0, 1.0, 1.0, 1.0 ,1.0]
+            
+            # apply pre-scaling
+            for iSW in range(1,6):
+                mSW = (GRD_SWindex==iSW)
+                GRD_NEsigma0[mSW] *= preScaling[iSW-1]
+                del mSW
+            
+            # apply descalloping
+            meanNEsigma0 = np.nanmean(GRD_NEsigma0)
+            GRD_NEsigma0 /= GRD_dsGain
+            del GRD_dsGain
+            
+            # save unscaled NEsigma0 as a band
+            self.add_band(GRD_NEsigma0,
+                parameters={'name': 'NEsigma0_'+pol+'_raw'})
+
+
+            #####   GET DENOISING COEFFICIENTS
+
+            # estimate coefficients from data (experimental mode)
+            if kwargs['expMode']:
+
+                # set experiment parameters
+                bufAzi = 30       # buffer size in azimuth direction
+                bufRng = 20       # buffer size in range direction
+                nAziSubBlk = 5    # number of blocks in azimuth direction
+                subWinSize = 25   # subwindow size to use for local statistics
+                
+                # compute azimuth subblock boundaries
+                aziFullCov = np.where(
+                                 np.sum(GRD_SWindex!=0,axis=1)==self.nSamples)
+                aziMin = aziFullCov[0][0] + bufAzi
+                aziMax = aziFullCov[0][-1] - bufAzi
+                blkBounds = np.linspace(aziMin,aziMax,
+                                        nAziSubBlk+1,dtype='uint')
+                
+                # azimuth subblock-wise processing
+                for iBlk in range(nAziSubBlk):
+                    
+                    print( 'compute denoising coefficients "%s" ... subblock %d/%d'
+                            % (kwargs['expMode'],iBlk+1,nAziSubBlk) )
+                    
+                    # azimuth boundaries
+                    aziMinBlk = int(blkBounds[iBlk])
+                    aziMaxBlk = int(blkBounds[iBlk+1])
+                
+                    if kwargs['expMode'] in ['noiseScaling','powerBalancing']:
+                        
+                        # prepare empty arrays
+                        noiseScalingEst = np.zeros(nAziSubBlk)
+                        powerBalancingEst = np.zeros(nAziSubBlk)
+                        fitSlopes = np.zeros(nAziSubBlk)
+                        fitOffsets = np.zeros(nAziSubBlk)
+                        fitResiduals = np.zeros(nAziSubBlk)
+                        corrCoeffs = np.zeros(nAziSubBlk)
+                        SWboundsBlk = np.zeros(15)
+                        
+                        # subswath-wise processing
+                        for iSW in range(1,6):
+                            
+                            # subswath mask
+                            mSW = (GRD_SWindex==iSW)
+                            
+                            # subswath boundaries
+                            SWboundsBlk[(iSW-1)*3] = np.mean(
+                                [ np.where(mSW[i])[0][0]
+                                  for i in range(aziMinBlk,aziMaxBlk+1) ])
+                            SWboundsBlk[(iSW-1)*3+2] = np.mean(
+                                [ np.where(mSW[i])[0][-1]
+                                  for i in range(aziMinBlk,aziMaxBlk+1) ])
+                            SWboundsBlk[(iSW-1)*3+1] = (
+                                SWboundsBlk[(iSW-1)*3]+SWboundsBlk[(iSW-1)*3+2] )/2.
+
+                            # range boundaries
+                            rngMinBlk = bufRng + max([ np.where(mSW[i])[0][0]
+                                            for i in range(aziMinBlk,aziMaxBlk+1) ])
+                            rngMaxBlk = -bufRng + min([ np.where(mSW[i])[0][-1]
+                                            for i in range(aziMinBlk,aziMaxBlk+1) ])
+                                            
+                            # subsets
+                            sigma0Blk = GRD_sigma0[aziMinBlk:aziMaxBlk+1,
+                                                   rngMinBlk:rngMaxBlk+1].copy()
+                            NEsigma0Blk = GRD_NEsigma0[aziMinBlk:aziMaxBlk+1,
+                                                       rngMinBlk:rngMaxBlk+1].copy()
+                            
+                            # discard samples with NaN or lowest 1% power
+                            detrended = ( np.nanmean(sigma0Blk-NEsigma0Blk,axis=0)
+                                          + np.nanmean(NEsigma0Blk) )
+                            lowPow = np.percentile(detrended[detrended > 0],1.)
+                            
+                            # range sample mask
+                            mRng = (detrended > lowPow)
+                            
+                            # save correlation coefficient
+                            corrCoeffs[iSW-1] = np.corrcoef(
+                                sigma0Blk.flatten(),NEsigma0Blk.flatten())[0,1]
+                                              
+                            if kwargs['expMode']=='noiseScaling':
+                                sf = np.linspace(0.0,2.0,201)
+                            elif kwargs['expMode']=='powerBalancing':
+                                # import noise scaling coefficients
+                                sf = get_denoising_coeffs(
+                                         preScaling,pol,self.IPFver)[0][iSW-1]
+                                # duplication for avoiding error in iteration
+                                sf = np.array([sf,sf])
+                            res = np.zeros_like(sf)                 # residuals
+                            # weight factor: use gradient of the noise power
+                            wf = np.nanmean(NEsigma0Blk,axis=0)
+                            wf = np.abs(np.gradient(wf))
+                            wf = (wf-wf.min())/(wf.max()-wf.min())  # normalize
+                            #wf = np.ones_like(wf)
+                            
+                            # iteration to find best-fit (best detrended curve)
+                            x = np.arange(rngMinBlk,rngMaxBlk+1)
+                            for i,isf in enumerate(sf):
+                                y = np.nanmean(sigma0Blk-NEsigma0Blk*isf,axis=0)
+                                P = np.polyfit( x[mRng],y[mRng],deg=1,
+                                                full=True,w=wf[mRng]  )
+                                res[i] = P[1]
+                            
+                            # find optimal scaling factor and save fit parameters
+                            scalingFactor = sf[res==min(res)].mean()
+                            y = np.nanmean(sigma0Blk-NEsigma0Blk*scalingFactor,
+                                           axis=0)
+                            P = np.polyfit( x[mRng],y[mRng],deg=1,full=True )
+                            noiseScalingEst[iSW-1] = scalingFactor
+                            fitSlopes[iSW-1] = P[0][0]
+                            fitOffsets[iSW-1] = P[0][1]
+                            fitResiduals[iSW-1] = P[1][0]
+                            del sigma0Blk, NEsigma0Blk, mSW
+
+                        # compute inter-subswath power balancing coefficients
+                        interSWboundsBlk = (
+                            SWboundsBlk[[2,5,8,11]]+SWboundsBlk[[3,6,9,12]] )/2.
+                        for i,rngPos in enumerate(interSWboundsBlk):
+                            fitPow1 = fitSlopes[i] * rngPos + fitOffsets[i]
+                            fitPow2 = fitSlopes[i+1] * rngPos + fitOffsets[i+1]
+                            powerBalancingEst[i+1] = fitPow1-fitPow2
+                        powerBalancingEst = np.cumsum(powerBalancingEst)
+
+                        # set reference subswath as EW3 to minimize radiometric bias
+                        powerBalancingEst -= powerBalancingEst[2]
+                        
+                        # print estimated denoising coefficients
+                        fmt_e3 = {'float_kind':lambda x: "%+.3e" % x}
+                        print np.array2string(eval(kwargs['expMode']+'Est'),
+                                              formatter=fmt_e3)
+                        print np.array2string(corrCoeffs,formatter=fmt_e3)
+                        print np.array2string(fitResiduals,formatter=fmt_e3)
+
+                        # subsets
+                        sigma0Blk = GRD_sigma0[aziMinBlk:aziMaxBlk+1,:].copy()
+                        NEsigma0Blk0 = GRD_NEsigma0[aziMinBlk:aziMaxBlk+1,:].copy()
+                        SWindexBlk = GRD_SWindex[aziMinBlk:aziMaxBlk+1,:].copy()
+
+                        # apply noise scaling, and power balancing
+                        NEsigma0Blk = NEsigma0Blk0.copy()
+                        for iSW in range(1,6):
+                            mSW = (SWindexBlk==iSW)
+                            NEsigma0Blk[mSW] = ( -powerBalancingEst[iSW-1]
+                                + NEsigma0Blk0[mSW] * noiseScalingEst[iSW-1] )
+
+                        # noise subtraction
+                        NCsigma0Blk = sigma0Blk - NEsigma0Blk
+
+                        # compute mean profiles
+                        sigma0pfRaw = np.nanmean(sigma0Blk,axis=0)
+                        sigma0stdRaw = np.nanstd(sigma0Blk,axis=0)
+                        NEsigma0pfRaw = np.nanmean(NEsigma0Blk0,axis=0)
+                        NEsigma0pfCor = np.nanmean(NEsigma0Blk,axis=0)
+                        sigma0pfCor = np.nanmean(NCsigma0Blk,axis=0)
+                        sigma0stdCor = np.nanstd(NCsigma0Blk,axis=0)
+                        negPowRate = (100.* np.sum(NCsigma0Blk<0,axis=0)
+                                          / np.sum(np.isfinite(NCsigma0Blk),axis=0))
+                        incAngPf = np.mean(rbsIA(np.arange(aziMinBlk,aziMaxBlk+1),
+                                                 np.arange(self.nSamples)),axis=0)
+                        elevAngPf = np.mean(rbsEA(np.arange(aziMinBlk,aziMaxBlk+1),
+                                                  np.arange(self.nSamples)),axis=0)
+
+                        # save estimated parameters
+                        estParams = { 'IPFver' : self.IPFver,
+                                      'expMode' : kwargs['expMode'],
+                                      'noiseScalingEst' : noiseScalingEst,
+                                      'powerBalancingEst' : powerBalancingEst,
+                                      'fitResiduals' : fitResiduals,
+                                      'corrCoeffs' : corrCoeffs,
+                                      'sigma0pfRaw' : sigma0pfRaw,
+                                      'NEsigma0pfRaw' : NEsigma0pfRaw,
+                                      'sigma0pfCor' : sigma0pfCor,
+                                      'NEsigma0pfCor' : NEsigma0pfCor,
+                                      'incAngPf' : incAngPf,
+                                      'elevAngPf' : elevAngPf,
+                                      'blkBounds' : blkBounds,
+                                      'negPowRate' : negPowRate,
+                                      'sigma0stdRaw' : sigma0stdRaw,
+                                      'sigma0stdCor' : sigma0stdCor            }
+                        np.savez( self.name[:-5]+'_%d_of_%d_%s.npz'
+                                      % (iBlk+1,nAziSubBlk,kwargs['expMode']),
+                                  **estParams )
+
+                        # add-up power
+                        mSW = (SWindexBlk!=0)
+                        NEsigma0BlkOffset = np.nanmean(NEsigma0Blk[mSW])
+                        NCsigma0Blk += NEsigma0BlkOffset
+                        NCsigma0Blk[NCsigma0Blk==0] = np.nan
+
+                        # save jpg
+                        vmin,vmax = np.percentile(
+                            sigma0Blk[np.isfinite(sigma0Blk)],(2.5,97.5))
+                        plt.imsave( self.name[:-5] + '_%d_of_%d_raw.jpg'
+                                    % (iBlk+1,nAziSubBlk),
+                                    sigma0Blk, vmin=vmin, vmax=vmax, cmap='gray' )
+                        plt.imsave( self.name[:-5] + '_%d_of_%d_%s.jpg'
+                                    % (iBlk+1,nAziSubBlk,kwargs['expMode']),
+                                    NCsigma0Blk, vmin=vmin, vmax=vmax, cmap='gray' )
+
+                        del( mSW, sigma0Blk, NEsigma0Blk0, SWindexBlk, NEsigma0Blk,
+                             NCsigma0Blk )
+
+                    elif kwargs['expMode']=='localScaling':
+                        
+                        # subsets
+                        bufRng = 30
+                        sigma0Blk = GRD_sigma0[aziMinBlk:aziMaxBlk+1,
+                                               bufRng:-bufRng+1].copy()
+                        NEsigma0Blk = GRD_NEsigma0[aziMinBlk:aziMaxBlk+1,
+                                                   bufRng:-bufRng+1].copy()
+                        SWindexBlk = GRD_SWindex[aziMinBlk:aziMaxBlk+1,
+                                                 bufRng:-bufRng+1].copy()
+
+                        # import coefficients from table
+                        noiseScaling,powerBalancing = (
+                            get_denoising_coeffs(preScaling,pol,self.IPFver)[:2] )
+
+                        # apply noise scaling, and power balancing
+                        meanNEsigma0Blk = np.nanmean(NEsigma0Blk)
+                        for iSW in range(1,6):
+                            mSW = (SWindexBlk==iSW)
+                            NEsigma0Blk[mSW] *= noiseScaling[iSW-1]
+                            NEsigma0Blk[mSW] -= powerBalancing[iSW-1]
+
+                        # total noise power conservation
+                        NEsigma0Blk -= (np.nanmean(NEsigma0Blk)-meanNEsigma0Blk)
+                        
+                        # save correlation coefficient
+                        corrCoeffs = np.zeros(5)
+                        for iSW in range(1,6):
+                            mSW = (SWindexBlk==iSW) * ((1.1*sigma0Blk-NEsigma0Blk)>0)
+                            corrCoeffs[iSW-1] = np.corrcoef(
+                                sigma0Blk[mSW],NEsigma0Blk[mSW])[0,1]
+                        
+                        # compute local statistics
+                        localNESZ,localSNR,localExtraScaling,localSTD,localSWindex = (
+                            getLocalScalingParams(
+                                sigma0Blk,NEsigma0Blk,SWindexBlk,subWinSize) )
+                        validIdx = ( np.isfinite(localNESZ)
+                                     * np.isfinite(localSNR)
+                                     * np.isfinite(localExtraScaling)
+                                     * np.isfinite(localSTD)
+                                     * (localSWindex%1==0) )
+                        
+                        # save estimated parameters
+                        estParams = { 'IPFver' : self.IPFver,
+                                      'expMode' : kwargs['expMode'],
+                                      'corrCoeffs' : corrCoeffs,
+                                      'NESZ' : localNESZ[validIdx],
+                                      'SNR' : localSNR[validIdx],
+                                      'extraSC' : localExtraScaling[validIdx],
+                                      'STD' : localSTD[validIdx],
+                                      'SWindex' : localSWindex[validIdx] }
+                        
+                        estParams = {'IPFver' : self.IPFver, 'STD':np.ones(5)*np.nan}
+                        for iSW in range(1,6):
+                            mSW = (SWindexBlk==iSW)
+                            estParams['STD'][iSW-1] = np.nanstd(sigma0Blk[mSW])
+                        np.savez( self.name[:-5]+'_%d_of_%d_%s.npz'
+                                      % (iBlk+1,nAziSubBlk,kwargs['expMode']),
+                                  **estParams )
+
+                # end of experiment
+                return
+
+
+            # import coefficients from table (operational mode)
+            else:
+                noiseScaling,powerBalancing,extraScaling = (
+                    get_denoising_coeffs(preScaling,pol,self.IPFver) )
+
+
+            #####   APPLY DENOISING COEFFICIENTS AND COMPUTE DENOISED SIGMA0
+
+            # apply noise scaling, and power balancing to NEsigma0
+            for iSW in range(1,6):
+                mSW = (GRD_SWindex==iSW)
+                GRD_NEsigma0[mSW] *= noiseScaling[iSW-1]
+                GRD_NEsigma0[mSW] -= powerBalancing[iSW-1]
+            self.diffNEsigma0 = (np.nanmean(GRD_NEsigma0)-meanNEsigma0)
+            GRD_NEsigma0 -= self.diffNEsigma0
+
+            # local SNR dependent adaptive noise scaling
+            if kwargs['adaptNoiSc'] and (pol=='HV'):
+                GRD_NEsigma0 = adaptiveNoiseScaling(
+                    GRD_sigma0,GRD_NEsigma0,GRD_SWindex,extraScaling,5)
+
+            # add-up power
+            if kwargs['addPow'] in ['EW1','EW2','EW3','EW4','EW5']:
+                mSW = (GRD_SWindex==int(kwargs['addPow'][-1]))
+                NEsigma0Offset = np.nanmean(GRD_NEsigma0[mSW])
+            elif kwargs['addPow']=='EW0':
+                mSW = (GRD_SWindex!=0)
+                NEsigma0Offset = np.nanmean(GRD_NEsigma0[mSW])
+            elif kwargs['addPow']==0:
+                NEsigma0Offset = 0
+            else:
+                NEsigma0Offset = 10**(kwargs['addPow']/10.)
+
+            # noise subtraction
+            GRD_NCsigma0 = GRD_sigma0 - GRD_NEsigma0 + NEsigma0Offset
+            GRD_NCsigma0[GRD_NCsigma0==0] = np.nan
+
+            # UNDER DEVELOPMENT ...
+            if kwargs['development']:
+                from sentinel1corrected.underDevelopment import devFtn
+                acqDate = os.path.split(self.fileName)[-1][17:25]
+                GRD_NCsigma0 = devFtn(
+                    self.IPFver,pol,acqDate,GRD_NCsigma0,
+                    GRD_NEsigma0,GRD_SWindex,NEsigma0Offset,25)
+         
+        if kwargs['fillVoid']:
+            # find pixels with negative power
+            mNeg = (np.nan_to_num(GRD_NCsigma0) < 0)
+            # replace them with raw sigma0 (just like SNAP-S1TBX)
+            GRD_NCsigma0[mNeg] = GRD_sigma0[mNeg]
+            del mNeg
+
+        # angular dependency correction for HH-pol
+        if pol=='HH' and kwargs['angDepCor']:
+            #angularDependency = 10**( 0.24 * (incidenceAngle-20.0) /10. )
+            # estimate incidenceAngle unsing RectBivariateSpline
+            incAng = rbsIA(np.arange(self.nLines),
+                            np.arange(self.nSamples)).astype(np.float32)
+            GRD_angDep = np.power(10, 0.24*(incAng-20.0)/10)
+            GRD_NCsigma0 = GRD_NCsigma0 * GRD_angDep
+            del incAng,GRD_angDep
+                
+        if kwargs['dBconv']:
+            GRD_sigma0 = 10*np.log10(GRD_sigma0)
             GRD_NEsigma0 = 10*np.log10(GRD_NEsigma0)
             GRD_NCsigma0 = 10*np.log10(GRD_NCsigma0)
+                    
+        # save subswath index, raw sigma0 and scaled NEsigma0 as band
+        self.add_band(GRD_SWindex,
+            parameters={'name': 'subswath_indices'})
+        self.add_band(GRD_sigma0,
+            parameters={'name': 'sigma0_'+pol+'_raw'})
+        self.add_band(GRD_NEsigma0,
+                        parameters={'name': 'NEsigma0_'+pol})
 
-        self.add_band(GRD_NEsigma0,parameters={'name': 'NEsigma0_' + pol})
 
+        # return denoised band
         return GRD_NCsigma0
