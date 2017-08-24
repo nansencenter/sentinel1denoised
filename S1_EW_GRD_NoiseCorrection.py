@@ -866,10 +866,9 @@ class Sentinel1Image(Nansat):
         self.add_band(denoisedBandArray,
                       parameters={'name': bandName + '_denoised'})
 
-
     def get_denoised_band(self, bandID, denoAlg='NERSC',
-                          addPow=0, adaptNoiSc=True, development=True,
-                          fillVoid=False, angDepCor=True, dBconv=True,
+                          addPow='EW0', adaptNoiSc=False, development=True,
+                          fillVoid=False, angDepCor=True, dBconv=False,
                           add_aux_bands=False, **kwargs):
         ''' Apply noise and scaloping gain correction to sigma0_HH/HV
         Params:
