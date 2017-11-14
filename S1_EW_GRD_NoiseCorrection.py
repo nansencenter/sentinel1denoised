@@ -223,10 +223,22 @@ class Sentinel1Image(Nansat):
             print('\nWARNING: IPF version of input image is lower than 2.53! '
                   'Noise correction result can be wrong.\n')
 
+        self.platform = self.fileName.split('/')[-1][:3]
+        obsStartDate = self.fileName.split('/')[-1].split('_')[4][:8]
+        obsStartTime = self.fileName.split('/')[-1].split('_')[4][9:]
         try:
-            self.auxCalibXML = parse(glob.glob(
+            auxCalibFiles = sorted(glob.glob(
                 os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             'S1A_AUX_CAL*.SAFE/data/s1a-aux-cal.xml') )[-1])
+                '%s_AUX_CAL*.SAFE' % self.platform) ))
+            auxCalibAvailable = []
+            for auxCalibFile in auxCalibFiles:
+                validStartDate = auxCalibFile.split('/')[-1].split('_')[3][1:9]
+                validStartTime = auxCalibFile.split('/')[-1].split('_')[3][10:18]
+                if (     (obsStartDate >= validStartDate)
+                     and (obsStartTime >= validStartTime) ):
+                    auxCalibAvailable.append(auxCalibFile)
+            auxCalibFile = sorted(auxCalibAvailable,key=lambda tup: tup[0])[-1]
+            self.auxCalibXML = parse(auxCalibFile + '/data/s1a-aux-cal.xml')
         except IndexError:
             print('\nERROR: Missing auxiliary product: S1A_AUX_CAL*.SAFE\n\
                    It must be in the same directory with this module.\n\
