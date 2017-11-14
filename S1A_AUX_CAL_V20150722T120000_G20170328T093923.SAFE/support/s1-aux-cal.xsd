@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- $Id: s1-aux-cal.xsd 10829 2014-11-13 00:02:48Z cthain $ -->
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" attributeFormDefault="unqualified" version="2.10">
+  <xsd:include schemaLocation="s1-object-types.xsd"/>
+  <xsd:complexType name="elevationAntennaPatternType">
+    <xsd:annotation>
+      <xsd:documentation>Elevation antenna pattern parameters record definition.</xsd:documentation>
+    </xsd:annotation>
+    <xsd:sequence>
+      <xsd:element name="beamNominalNearRange" type="double">
+        <xsd:annotation>
+          <xsd:documentation>Elevation angle of the nominal near range extent of the beam [degrees].</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="beamNominalFarRange" type="double">
+        <xsd:annotation>
+          <xsd:documentation>Elevation angle of the nominal far range extent of the beam [degrees].</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="elevationAngleIncrement" type="double">
+        <xsd:annotation>
+          <xsd:documentation>Elevation angle increment [degrees]. This parameter defines the step size between the pattern values in the two way elevation antenna pattern.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="values" type="complexArray">
+        <xsd:annotation>
+          <xsd:documentation>Two-way complex antenna elevation pattern values. The centre value in the vector corresponds to the referenceAntennaAngle in the Roll Steering parameters described in the Instrument auxiliary file (the vector must contain an odd number of complex values), and the values before and after the centre value correspond to steps of elevationAngleIncrement from the centre value. The pattern contains attribute “count” complex floating point values separated by spaces in the order I Q I Q I Q...  The first value in the antenna pattern vector corresponds to –((count  - 1)/2) * elevationAngleIncrement degrees, and the last value corresponds to +((count  - 1)/2) * elevationAngleIncrement degrees. The complex values in this vector are applied to the complex image data as:
+ComplexDataCorrected(x,y) = ComplexData(x,y) / sqrt(ComplexEAP(x,y))</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+    </xsd:sequence>
+  </xsd:complexType>
+  <xsd:complexType name="azimuthAntennaPatternType">
+    <xsd:annotation>
+      <xsd:documentation>Azimuth antenna pattern parameters record definition.</xsd:documentation>
+    </xsd:annotation>
+    <xsd:sequence>
+      <xsd:element name="azimuthAngleIncrement" type="double">
+        <xsd:annotation>
+          <xsd:documentation>Azimuth angle increment [degrees]. This parameter defines the step size between the values in the two way azimuth antenna pattern.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="values" type="floatPatternArray">
+        <xsd:annotation>
+          <xsd:documentation>Two way azimuth antenna pattern values [dB]. The centre value of the vector corresponds to 0 degrees (the vector must contain an odd number of values), and the values before and after the centre value correspond to steps of azimuthAngleIncrement degrees from the centre value.  The pattern contains attribute "count" floating point values separated by spaces.  The first value in the antenna pattern vector corresponds to –((count  - 1)/2) * azimuthAngleIncrement degrees, and the last value corresponds to +((count  - 1)/2) * azimuthAngleIncrement degrees.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+    </xsd:sequence>
+  </xsd:complexType>
+  <xsd:complexType name="azimuthAntennaElementPatternType">
+    <xsd:annotation>
+      <xsd:documentation>Azimuth antenna element pattern parameters record definition.</xsd:documentation>
+    </xsd:annotation>
+    <xsd:sequence>
+      <xsd:element name="azimuthAngleIncrement" type="double">
+        <xsd:annotation>
+          <xsd:documentation>Azimuth angle increment [degrees]. This parameter defines the step size between the values in the two way azimuth antenna element pattern.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="values" type="floatPatternArray">
+        <xsd:annotation>
+          <xsd:documentation>Two way azimuth antenna element pattern values [dB]. The centre value of the vector corresponds to 0 degrees (the vector must contain an odd number of values), and the values before and after the centre value correspond to steps of azimuthAngleIncrement degrees from the centre value.  The pattern contains attribute "count" floating point values separated by spaces.  The first value in the antenna pattern vector corresponds to –((count  - 1)/2) * azimuthAngleIncrement degrees, and the last value corresponds to +((count  - 1)/2) * azimuthAngleIncrement degrees.  </xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+    </xsd:sequence>
+  </xsd:complexType>
+  <xsd:complexType name="calibrationParamsType">
+    <xsd:annotation>
+      <xsd:documentation>Calibration parameters record definition.</xsd:documentation>
+    </xsd:annotation>
+    <xsd:sequence>
+      <xsd:element name="swath" type="swathType">
+        <xsd:annotation>
+          <xsd:documentation>Canonical name of the swath to which this set of calibration parameters applies. The swath and polarisation are used to index the applicable calibrationParams record. </xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="polarisation" type="polarisationType">
+        <xsd:annotation>
+          <xsd:documentation>Polarisation to which this set of calibration parameters applies. The polarisation andUsed along with the swathNumber are used to index the applicable calibrationParams record.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="elevationAntennaPattern" type="elevationAntennaPatternType">
+        <xsd:annotation>
+          <xsd:documentation>Two way elevation antenna pattern parameters. The EAPs are used to correct the corresponding radiometric variation of the data in the range direction. The EAPs are also used for the estimation and removal of the thermal noise level.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="azimuthAntennaPattern" type="azimuthAntennaPatternType">
+        <xsd:annotation>
+          <xsd:documentation>Two way azimuth antenna pattern (AAP) parameters.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="azimuthAntennaElementPattern" type="azimuthAntennaElementPatternType">
+        <xsd:annotation>
+          <xsd:documentation>Two way azimuth antenna element pattern values. The AAEP maps azimuth steering angles to gain power and is used during de-scalloping of TOPSAR data. The AAEP is specific to IW and EW modes and is ignored for all others.  </xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="absoluteCalibrationConstant" type="double">
+        <xsd:annotation>
+          <xsd:documentation>Absolute calibration constant value to apply during processing. Although the structure of the file allows for a unique value per swath and polarisation the value of this field must be the same for all swaths and polarisations within the mode. The calibration constant C0 (described in the Sentinel-1 SAR Instrument Calibration and Characterisation Plan) should be merged into this field to acheive an overall gain value.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+      <xsd:element name="noiseCalibrationFactor" type="double">
+        <xsd:annotation>
+          <xsd:documentation>Noise calibration factor used in the estimation of the thermal noise.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+    </xsd:sequence>
+  </xsd:complexType>
+  <xsd:complexType name="calibrationParamsListType">
+    <xsd:annotation>
+      <xsd:documentation>List of calibration parameter records.</xsd:documentation>
+    </xsd:annotation>
+    <xsd:sequence>
+      <xsd:element name="calibrationParams" type="calibrationParamsType" maxOccurs="92">
+        <xsd:annotation>
+          <xsd:documentation>Calibration parameter record. There may be up to one record per swath (23 nominal swaths) per polarisation (4 polarisation combinations for SM, IW, EW, EN and AN, 2 for WV) for a maximum total of 88 records.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+    </xsd:sequence>
+    <xsd:attribute name="count" type="xsd:unsignedInt" use="required">
+      <xsd:annotation>
+        <xsd:documentation>Number of calibration parameter records in the list.</xsd:documentation>
+      </xsd:annotation>
+    </xsd:attribute>
+  </xsd:complexType>
+  <xsd:complexType name="auxiliaryCalibrationType">
+    <xsd:annotation>
+      <xsd:documentation>Calibration auxiliary file definition (AUX_CAL)</xsd:documentation>
+    </xsd:annotation>
+    <xsd:sequence>
+      <xsd:element name="calibrationParamsList" type="calibrationParamsListType">
+        <xsd:annotation>
+          <xsd:documentation>List of calibration parameter records.</xsd:documentation>
+        </xsd:annotation>
+      </xsd:element>
+    </xsd:sequence>
+    <xsd:attribute name="schemaVersion" type="xsd:decimal" use="required" fixed="2.10"/>
+  </xsd:complexType>
+  <xsd:element name="auxiliaryCalibration" type="auxiliaryCalibrationType">
+    <xsd:annotation>
+      <xsd:documentation>Calibration auxiliary file definition (AUX_CAL)</xsd:documentation>
+    </xsd:annotation>
+  </xsd:element>
+</xsd:schema>
