@@ -238,11 +238,12 @@ class Sentinel1Image(Nansat):
                      and (obsStartTime >= validStartTime) ):
                     auxCalibAvailable.append(auxCalibFile)
             auxCalibFile = sorted(auxCalibAvailable,key=lambda tup: tup[0])[-1]
-            self.auxCalibXML = parse(auxCalibFile + '/data/s1a-aux-cal.xml')
+            self.auxCalibXML = parse(auxCalibFile + '/data/%s-aux-cal.xml' % self.platform.lower())
         except IndexError:
-            print('\nERROR: Missing auxiliary product: S1A_AUX_CAL*.SAFE\n\
+            print('\nERROR: Missing auxiliary product: %s_AUX_CAL*.SAFE\n\
                    It must be in the same directory with this module.\n\
-                   You can get it from https://qc.sentinel1.eo.esa.int/aux_cal')
+                   You can get it from https://qc.sentinel1.eo.esa.int/aux_cal'
+                   % self.platform)
 
 
     def get_azimuthAntennaElevationPattern(self, pol):
