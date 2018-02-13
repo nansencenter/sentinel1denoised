@@ -1,0 +1,23 @@
+If you use Sentinel1Denoised in any academic work then you *must* cite the following paper:
+
+Park, Jeong-Won; Korosov, Anton; Babiker, Mohamed; Sandven, Stein; and Won, Joong-Sun (in press): Efficient noise removal of Sentinel-1 TOPSAR cross-polarization channel, IEEE Transactions on Geoscience and Remote Sensing, doi:10.1109/TGRS.2017.2765248
+
+The PDF of this paper is available at https://doi.org/10.1109/TGRS.2017.2765248
+
+
+In BibTeX format:
+
+@ARTICLE{Park20171, 
+	author={J. W. Park and A. A. Korosov and M. Babiker and S. Sandven and J. S. Won}, 
+	journal={IEEE Transactions on Geoscience and Remote Sensing}, 
+	title={Efficient Thermal Noise Removal for Sentinel-1 TOPSAR Cross-Polarization Channel}, 
+	year={2017}, 
+	volume={PP}, 
+	number={99}, 
+	pages={1-11}, 
+	keywords={Additives;Antennas;Azimuth;Backscatter;Noise reduction;Synthetic aperture radar;Thermal noise;Cross polarization;Sentinel-1;Terrain Observation with Progressive Scans synthetic aperture radar (TOPSAR);denoising;scalloping;thermal noise.}, 
+	doi={10.1109/TGRS.2017.2765248}, 
+	ISSN={0196-2892}, 
+	month={}
+}
+
