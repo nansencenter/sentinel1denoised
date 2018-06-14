@@ -973,8 +973,6 @@ class Sentinel1Image(Nansat):
         self.add_band(self.modifiedNoiseEquivalentSigma0Map(polarization, localNoisePowerCompensation=False),
                       parameters={'name': 'NEsigma0_%s' % polarization})
         denoisedBandArray = self.thermalNoiseRemoval_dev(polarization)
-        if polarization == 'HH':
-            denoisedBandArray = self.angularDependencyCorrection(polarization, denoisedBandArray)
         self.add_band(denoisedBandArray,
                       parameters={'name': 'sigma0_%s' % polarization + '_denoised'})
 
