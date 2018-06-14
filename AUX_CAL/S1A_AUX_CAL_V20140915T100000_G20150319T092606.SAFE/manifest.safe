@@ -1,0 +1,61 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ns0:XFDU version="esa/safe/sentinel-1.0/sentinel-1/auxiliary/sar/cal" xmlns:ns0="urn:ccsds:schema:xfdu:1">
+  <informationPackageMap>
+    <ns0:contentUnit dmdID="platform" pdiID="processing" textInfo="SENTINEL-1A L1 Auxiliary Calibration Parameters" unitType="SAFE Archive Information Package">
+      <ns0:contentUnit repID="auxSchema" unitType="Measurement Data Unit">
+        <dataObjectPointer dataObjectID="auxData" />
+      </ns0:contentUnit>
+    </ns0:contentUnit>
+  </informationPackageMap>
+  <metadataSection>
+    <metadataObject ID="processing" category="PDI" classification="PROVENANCE">
+      <metadataWrap mimeType="text/xml" textInfo="Processing" vocabularyName="SAFE">
+        <xmlData>
+          <ns1:processing name="AUX_CAL Generation" start="2015-03-19T09:26:06.000000" stop="2015-03-19T09:26:06.000000" xmlns:ns1="http://www.esa.int/safe/sentinel-1.0">
+            <ns1:facility country="France" name="MPC_" site="Brest" />
+          </ns1:processing>
+        </xmlData>
+      </metadataWrap>
+    </metadataObject>
+    <metadataObject ID="platform" category="DMD" classification="DESCRIPTION">
+      <metadataWrap mimeType="text/xml" textInfo="Platform Description" vocabularyName="SAFE">
+        <xmlData>
+          <ns1:platform xmlns:ns1="http://www.esa.int/safe/sentinel-1.0">
+            <ns1:nssdcIdentifier>0000-000A</ns1:nssdcIdentifier>
+            <ns1:familyName>SENTINEL-1</ns1:familyName>
+            <ns1:number>A</ns1:number>
+            <ns1:instrument>
+              <ns1:familyName abbreviation="SAR">Synthetic Aperture Radar</ns1:familyName>
+            </ns1:instrument>
+          </ns1:platform>
+        </xmlData>
+      </metadataWrap>
+    </metadataObject>
+    <metadataObject ID="standAloneProductInformation" category="DMD" classification="DESCRIPTION">
+      <metadataWrap mimeType="text/xml" textInfo="Stand Alone Product Information" vocabularyName="SAFE">
+        <xmlData>
+          <ns1:standAloneProductInformation xmlns:ns1="http://www.esa.int/safe/sentinel-1.0/sentinel-1/auxiliary/sar">
+            <ns1:auxProductType>AUX_CAL</ns1:auxProductType>
+            <ns1:validity>2014-09-15T10:00:00.000000</ns1:validity>
+            <ns1:generation>2015-03-19T09:26:06.000000</ns1:generation>
+            <ns1:instrumentConfigurationId>3</ns1:instrumentConfigurationId>
+          </ns1:standAloneProductInformation>
+        </xmlData>
+      </metadataWrap>
+    </metadataObject>
+    <metadataObject ID="auxSchema" category="REP" classification="SYNTAX">
+      <metadataReference href="./support/s1-aux-cal.xsd" locatorType="URL" mimeType="text/xml" />
+    </metadataObject>
+    <metadataObject ID="s1ObjectTypesSchema" category="REP" classification="SYNTAX">
+      <metadataReference href="./support/s1-object-types.xsd" locatorType="URL" mimeType="text/xml" />
+    </metadataObject>
+  </metadataSection>
+  <dataObjectSection>
+    <dataObject ID="auxData" repID="auxSchema">
+      <byteStream mimeType="text/xml" size="1516420">
+        <fileLocation href="./data/s1a-aux-cal.xml" locatorType="URL" />
+        <checksum checksumName="MD5">0e92cf30fe1b824c3b94236385a5b1c9</checksum>
+      </byteStream>
+    </dataObject>
+  </dataObjectSection>
+</ns0:XFDU>
