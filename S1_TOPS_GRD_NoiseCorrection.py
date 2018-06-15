@@ -1,4 +1,4 @@
-import os, glob, warnings, zipfile
+import os, sys, glob, warnings, zipfile
 import numpy as np
 from datetime import datetime, timedelta
 from xml.dom.minidom import parse, parseString
@@ -45,6 +45,40 @@ def get_DOM_nodeValue(element, tags, oType='str'):
 
 def cubic_hermite_interpolation(x,y,xi):
     return np.polynomial.hermite.hermval(xi, np.polynomial.hermite.hermfit(x,y,deg=3))
+
+
+def range_to_target(satPosVec, lookVec, terrainHeight=0):
+    ''' Compute slant range distance to target on WGS-84 Earth ellipsoid '''
+    A_e = 6378137.0
+    B_e = A_e * (1 - 1./298.257223563)
+    A_e += terrainHeight
+    B_e += terrainHeight
+    epsilon = (A_e**2-B_e**2)/B_e**2
+    F = ( (np.dot(satPosVec,lookVec) + epsilon * satPosVec[2] * lookVec[2])
+          / (1 + epsilon * lookVec[2]**2) )
+    G = ( (np.dot(satPosVec,satPosVec) - A_e**2 + epsilon * satPosVec[2]**2)
+          / (1 + epsilon * lookVec[2]**2) )
+    return -F - np.sqrt(F**2 - G)
+
+
+def planar_rotation(rotAxis, inputVec, rotAngle):
+    ''' planar rotation about a given axis '''
+    rotAxis = rotAxis / np.linalg.norm(rotAxis)
+    sinAng = np.sin(np.deg2rad(rotAngle))
+    cosAng = np.cos(np.deg2rad(rotAngle))
+    d11 = (1 - cosAng) * rotAxis[0]**2 + cosAng
+    d12 = (1 - cosAng) * rotAxis[0] * rotAxis[1] - sinAng * rotAxis[2]
+    d13 = (1 - cosAng) * rotAxis[0] * rotAxis[2] + sinAng * rotAxis[1]
+    d21 = (1 - cosAng) * rotAxis[0] * rotAxis[1] + sinAng * rotAxis[2]
+    d22 = (1 - cosAng) * rotAxis[1]**2 + cosAng
+    d23 = (1 - cosAng) * rotAxis[1] * rotAxis[2] - sinAng * rotAxis[0]
+    d31 = (1 - cosAng) * rotAxis[0] * rotAxis[2] - sinAng * rotAxis[1]
+    d32 = (1 - cosAng) * rotAxis[1] * rotAxis[2] + sinAng * rotAxis[0]
+    d33 = (1 - cosAng) * rotAxis[2]**2 + cosAng
+    outputVec = np.array([ d11 * inputVec[0] + d12 * inputVec[1] + d13 * inputVec[2],
+                           d21 * inputVec[0] + d22 * inputVec[1] + d23 * inputVec[2],
+                           d31 * inputVec[0] + d32 * inputVec[1] + d33 * inputVec[2]  ])
+    return outputVec
 
 
 
@@ -488,7 +522,7 @@ class Sentinel1Image(Nansat):
             else:
                 raise ValueError('number of bursts cannot be determined.')
         return focusedBurstLengthInTime
-
+        
 
     def geolocationGridPointInterpolator(self, polarization, itemName):
         ''' generate interpolator for items in geolocation grid point list '''
@@ -576,14 +610,75 @@ class Sentinel1Image(Nansat):
         return calibrationVectorMap
 
 
-    def noiseVectorMap(self, polarization):
+    def elevationAngleInterpolator(self, polarization):
+        ''' generate elevation angle interpolator using the refined elevation angle 
+            calculated from orbit vectors and WGS-84 ellipsoid '''
+        angleStep = 1e-3
+        maxIter = 100
+        distanceThreshold = 1e-2
+        geolocationGridPoint = self.import_geolocationGridPoint(polarization)
+        line = geolocationGridPoint['line']
+        uniqueLine = np.unique(line)
+        pixel = geolocationGridPoint['pixel']
+        uniquePixel = np.unique(pixel)
+        azimuthTimeIntp = self.geolocationGridPointInterpolator(polarization, 'azimuthTime')
+        slantRangeTimeIntp = self.geolocationGridPointInterpolator(polarization, 'slantRangeTime')
+        subswathIndexMap = self.subswathIndexMap(polarization)
+        orbits = self.orbitAtGivenTime(polarization,
+                    azimuthTimeIntp(uniqueLine, uniquePixel).reshape(len(uniqueLine) * len(uniquePixel)) )
+        elevationAngle = []
+        for li in range(len(uniqueLine) * len(uniquePixel)):
+            positionVector = orbits['positionXYZ'][li]
+            velocityVector = orbits['velocityXYZ'][li]
+            slantRangeDistance = (299792458. / 2 * slantRangeTimeIntp(line[li], pixel[li])).item()
+            lookVector = np.cross(velocityVector, positionVector)
+            lookVector /= np.linalg.norm(lookVector)
+            rotationAxis = np.cross(positionVector, lookVector)
+            rotationAxis /= np.linalg.norm(rotationAxis)
+            depressionAngle = 45.
+            nIter = 0
+            status = False
+            while not (status or (nIter >= maxIter)):
+                rotatedLookVector1 = planar_rotation(rotationAxis, lookVector, depressionAngle)
+                rotatedLookVector2 = planar_rotation(rotationAxis, lookVector, depressionAngle + angleStep)
+                err1 = range_to_target(positionVector, rotatedLookVector1) - slantRangeDistance
+                err2 = range_to_target(positionVector, rotatedLookVector2) - slantRangeDistance
+                depressionAngle += ( err1 / ((err1 - err2) / angleStep) )
+                status = np.abs(err1).max() < distanceThreshold
+                nIter += 1
+            elevationAngle.append(90. - depressionAngle)
+        elevationAngle = np.reshape(elevationAngle, (len(uniqueLine), len(uniquePixel)))
+        interpolator = RectBivariateSpline(uniqueLine, uniquePixel, elevationAngle)
+        return interpolator
+
+
+    def rollAngleInterpolator(self, polarization):
+        antennaPattern = self.import_antennaPattern(polarization)
+        relativeAzimuthTime = []
+        rollAngle = []
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            subswathID = '%s%s' % (self.obsMode, iSW)
+            relativeAzimuthTime.append([ (t-self.time_coverage_center).total_seconds()
+                                         for t in antennaPattern[subswathID]['azimuthTime'] ])
+            rollAngle.append(antennaPattern[subswathID]['roll'])
+        relativeAzimuthTime = np.hstack(relativeAzimuthTime)
+        rollAngle = np.hstack(rollAngle)
+        sortIndex = np.argsort(rollAngle)
+        interpolator = InterpolatedUnivariateSpline(relativeAzimuthTime[sortIndex], rollAngle[sortIndex])
+        return interpolator
+
+
+    def noiseVectorMap(self, polarization, lutShift=True):
         ''' convert noise vectors into full grid pixels '''
         noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
         swathBounds = self.import_swathBounds(polarization)
         subswathIndexMap = self.subswathIndexMap(polarization)
         noiseVectorMap = np.ones(self.shape()) * np.nan
+        annoElevAngleIntp = self.geolocationGridPointInterpolator(polarization, 'elevationAngle')
+        refinedElevAngleIntp = self.elevationAngleInterpolator(polarization)
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
-            swathBound = swathBounds['%s%s' % (self.obsMode, iSW)]
+            subswathID = '%s%s' % (self.obsMode, iSW)
+            swathBound = swathBounds[subswathID]
             line = np.array(noiseRangeVector['line'])
             valid = (   (line >= min(swathBound['firstAzimuthLine']))
                       * (line <= max(swathBound['lastAzimuthLine'])) )
@@ -599,22 +694,18 @@ class Sentinel1Image(Nansat):
                 valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
                 if valid.sum()==0:
                     continue
-                zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins)
+                # noiseLut shifting
+                if lutShift:
+                    xShift = np.squeeze( (annoElevAngleIntp(y,xBins) - refinedElevAngleIntp(y,xBins))
+                                          / np.gradient(np.squeeze(annoElevAngleIntp(y,xBins))) )
+                    zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins + xShift)
+                else:
+                    zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins)
             valid = np.isfinite(np.sum(zi,axis=1))
             interpFunc = RectBivariateSpline(xBins, line[valid], zi[valid,:].T, kx=1, ky=1)
             valid = (subswathIndexMap==iSW)
             noiseVectorMap[valid] = interpFunc(np.arange(self.shape()[1]),
                                                np.arange(self.shape()[0])).T[valid]
-            '''
-            for li,y in enumerate(line):
-                x = np.array(pixel[li])
-                z = np.array(noiseRangeLut[li])
-                valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
-                if valid.sum()==0:
-                    continue
-                if (abs((noiseVectorMap[y,x[valid]]-z[valid]) / z[valid] * 100.) > 1.).any():
-                    raise ValueError('interpolation error occured.')
-            '''
         if self.IPFversion >= 2.9:
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
                 subswathID = '%s%s' % (self.obsMode, iSW)
