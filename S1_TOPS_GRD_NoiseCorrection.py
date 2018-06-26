@@ -668,7 +668,7 @@ class Sentinel1Image(Nansat):
         return interpolator
 
 
-    def noiseVectorMap(self, polarization, lutShift=True):
+    def noiseVectorMap(self, polarization, lutShift=False):
         ''' convert noise vectors into full grid pixels '''
         noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
         swathBounds = self.import_swathBounds(polarization)
@@ -783,7 +783,7 @@ class Sentinel1Image(Nansat):
             # azimuth antenna element patterns (AAEP) lookup table for given subswath
             AAEP = self.import_azimuthAntennaElementPattern(polarization)[subswathID]
             gainAAEP = np.array(AAEP['azimuthAntennaElementPattern'])
-            angleAAEP = ( np.arange(-len(gainAAEP)/2+1, len(gainAAEP)/2+1)
+            angleAAEP = ( np.arange(-(len(gainAAEP)//2), len(gainAAEP)//2+1)
                           * AAEP['azimuthAngleIncrement'] )
             # subswath range center pixel index
             subswathCenterSampleIndex = self.subswathCenterSampleIndex(polarization)[subswathID]
