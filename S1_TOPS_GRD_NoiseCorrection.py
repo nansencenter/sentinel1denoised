@@ -1,4 +1,4 @@
-import os, sys, glob, warnings, zipfile
+import os, sys, glob, warnings, zipfile, requests, subprocess
 import numpy as np
 from datetime import datetime, timedelta
 from xml.dom.minidom import parse, parseString
@@ -143,16 +143,30 @@ class Sentinel1Image(Nansat):
         for resource in resourceList:
             if resource.attributes['role'].value=='AUX_CAL':
                 auxCalibFilename = resource.attributes['name'].value.split('/')[-1]
-        try:
-            self.auxiliaryCalibrationXML = parse(
-                os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                    'AUX_CAL/%s/data/%s-aux-cal.xml'
-                    % (auxCalibFilename, self.platform.lower())))
-        except IndexError:
-            print('\nERROR: Missing auxiliary calibration product: %s\n\
-                   It must be in the AUX_CAL directory of this module.\n\
-                   You can get it from https://qc.sentinel1.eo.esa.int/aux_cal'
-                   % auxCalibFilename)
+
+        self.set_aux_data_dir()
+        self.download_aux_calibration(auxCalibFilename, self.platform.lower())
+        self.auxiliaryCalibrationXML = parse(self.auxiliaryCalibration_file)
+
+    def set_aux_data_dir(self):
+        """ Set directory where aux calibration data is stored """
+        self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.environ.get('HOME')),
+                                         '.s1denoise')
+        if not os.path.exists(self.aux_data_dir):
+            os.makedirs(self.aux_data_dir)
+
+    def download_aux_calibration(self, filename, platform):
+        """ Download auxiliary calibration files form ESA in self.aux_data_dir """
+        cal_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % platform)
+        cal_file_tgz = os.path.join(self.aux_data_dir, filename + '.TGZ')
+        if not os.path.exists(cal_file):
+            parts = filename.split('_')
+            cal_url = 'https://qc.sentinel1.eo.esa.int/product/%s/%s_%s/%s/%s.TGZ' %(parts[0], parts[1], parts[2], parts[3][1:], filename)
+            r = requests.get(cal_url, stream=True)
+            with open(cal_file_tgz, "wb") as f:
+                f.write(r.content)
+            subprocess.call(['tar', '-xzvf', cal_file_tgz, '-C', self.aux_data_dir])
+        self.auxiliaryCalibration_file = cal_file
 
 
     def import_antennaPattern(self, polarization):
@@ -451,7 +465,7 @@ class Sentinel1Image(Nansat):
                 get_DOM_nodeValue(iList,['velocity','z'],'float'))
         return orbit
 
-    
+
     def import_processorScalingFactor(self, polarization):
         ''' import swath processing scaling factors from annotation XML DOM '''
         swathProcParamsList = self.annotationXML[polarization].getElementsByTagName('swathProcParams')
@@ -522,7 +536,7 @@ class Sentinel1Image(Nansat):
             else:
                 raise ValueError('number of bursts cannot be determined.')
         return focusedBurstLengthInTime
-        
+
 
     def geolocationGridPointInterpolator(self, polarization, itemName):
         ''' generate interpolator for items in geolocation grid point list '''
@@ -611,7 +625,7 @@ class Sentinel1Image(Nansat):
 
 
     def elevationAngleInterpolator(self, polarization):
-        ''' generate elevation angle interpolator using the refined elevation angle 
+        ''' generate elevation angle interpolator using the refined elevation angle
             calculated from orbit vectors and WGS-84 ellipsoid '''
         angleStep = 1e-3
         maxIter = 100
@@ -764,8 +778,8 @@ class Sentinel1Image(Nansat):
                       noiseCalibrationFactor['%s%s' % (self.obsMode, iSW)]
                     * {'IW':474, 'EW':1087}[self.obsMode]**2 )
         return noiseEquivalentSigma0
-    
-    
+
+
     def incidenceAngleMap(self, polarization):
         ''' incidence angle '''
         interpolator = self.geolocationGridPointInterpolator(polarization, 'incidenceAngle')
@@ -897,8 +911,8 @@ class Sentinel1Image(Nansat):
                 sigma0, noiseEquivalentSigma0, subswathIndexMap,
                 extraScalingParameters, 5 )
         return noiseEquivalentSigma0
-            
-            
+
+
     def thermalNoiseRemoval(self, polarization, algorithm='NERSC',
             localNoisePowerCompensation=False, preserveTotalPower=False, returnNESZ=False):
         ''' thermal noise removal for operational use '''
@@ -999,7 +1013,7 @@ class Sentinel1Image(Nansat):
             # return noise power subtracted sigma nought
             return sigma0
     '''
-    
+
 
     def thermalNoiseRemoval_dev(self, polarization,
             preserveTotalPower=True, returnNESZ=False, windowSize=25):
