@@ -1,4 +1,4 @@
- # Sentinel1Denoised performs various corrections on sentinel1 images
+# Sentinel1Denoised performs various corrections on sentinel1 images
 # Copyright (C) 2016-2018 Nansen Environmental and Remote Sensing Center, Jeong-Won Park, Anton Korosov
 
 # This program is free software: you can redistribute it and/or modify
@@ -1006,11 +1006,6 @@ class Sentinel1Image(Nansat):
                       zip(swb['lastRangeSample'],swb['firstAzimuthLine'],swb['lastAzimuthLine'])])
             sw2 = np.vstack([sigma0[fa:la+1,lr+1:lr+windowSize+1] for lr,fa,la in
                       zip(swb['lastRangeSample'],swb['firstAzimuthLine'],swb['lastAzimuthLine'])])
-            '''
-            scalingFactor = np.nanmedian([ np.nanstd(sw2[ri:ri+windowSize,:])
-                                           / np.nanstd(sw1[ri:ri+windowSize,:])
-                                           for ri in range(len(sw1)-windowSize) ])
-            '''
             sd_ratio = [ np.nanstd(sw2[ri:ri+windowSize,:]) / np.nanstd(sw1[ri:ri+windowSize,:])
                          for ri in range(len(sw1)-windowSize) ]
             amp_ratio = [ np.nanmean(sw2[ri:ri+windowSize,:]) / np.nanmean(sw1[ri:ri+windowSize,:])
