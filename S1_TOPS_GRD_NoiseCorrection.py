@@ -104,16 +104,16 @@ class Sentinel1Image(Nansat):
         ''' Read calibration/annotation XML files and auxiliary XML file '''
         Nansat.__init__( self, filename,
                          mapperName=mapperName, logLevel=logLevel)
-        if ( self.fileName.split('/')[-1][:16]
+        if ( self.filename.split('/')[-1][:16]
              not in ['S1A_IW_GRDH_1SDH', 'S1A_IW_GRDH_1SDV',
                      'S1B_IW_GRDH_1SDH', 'S1B_IW_GRDH_1SDV',
                      'S1A_EW_GRDM_1SDH', 'S1A_EW_GRDM_1SDV',
                      'S1B_EW_GRDM_1SDH', 'S1B_EW_GRDM_1SDV' ] ):
              raise ValueError( 'Source file must be Sentinel-1A/1B '
                  'IW_GRDH_1SDH, IW_GRDH_1SDV, EW_GRDM_1SDH, or EW_GRDM_1SDV product.' )
-        self.platform = self.fileName.split('/')[-1][:3]
-        self.obsMode = self.fileName.split('/')[-1][4:6]
-        txPol = self.fileName.split('/')[-1][15]
+        self.platform = self.filename.split('/')[-1][:3]
+        self.obsMode = self.filename.split('/')[-1][4:6]
+        txPol = self.filename.split('/')[-1][15]
         self.annotationXML = {}
         self.calibrationXML = {}
         self.noiseXML = {}
@@ -296,7 +296,7 @@ class Sentinel1Image(Nansat):
 
     def import_denoisingCoefficients(self, polarization):
         ''' import denoising coefficients '''
-        satID = self.fileName.split('/')[-1][:3]
+        satID = self.filename.split('/')[-1][:3]
         denoisingParameters = np.load( os.path.join(
             os.path.dirname(os.path.realpath(__file__)), 'denoising_parameters_%s.npz' % satID),
             encoding='latin1' )
@@ -309,7 +309,7 @@ class Sentinel1Image(Nansat):
         closestIPFversion = float(
             versionsInLUT[np.argmin(abs(self.IPFversion - np.array(versionsInLUT, dtype=np.float)))])
         IPFversion = float(self.IPFversion)
-        sensingDate = datetime.strptime(self.fileName.split('/')[-1].split('_')[4], '%Y%m%dT%H%M%S')
+        sensingDate = datetime.strptime(self.filename.split('/')[-1].split('_')[4], '%Y%m%dT%H%M%S')
         if satID=='S1B' and IPFversion==2.72 and sensingDate >= datetime(2017,1,16,13,42,34):
             # Adaption for special case.
             # ESA abrubtly changed scaling LUT in AUX_PP1 from 20170116 while keeping the IPFversion.
