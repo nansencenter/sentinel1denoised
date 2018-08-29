@@ -640,7 +640,7 @@ class Sentinel1Image(Nansat):
         return calibrationVectorMap
 
 
-    def elevationAngleInterpolator(self, polarization):
+    def refinedElevationAngleInterpolator(self, polarization):
         ''' generate elevation angle interpolator using the refined elevation angle
             calculated from orbit vectors and WGS-84 ellipsoid '''
         angleStep = 1e-3
@@ -693,8 +693,55 @@ class Sentinel1Image(Nansat):
             rollAngle.append(antennaPattern[subswathID]['roll'])
         relativeAzimuthTime = np.hstack(relativeAzimuthTime)
         rollAngle = np.hstack(rollAngle)
-        sortIndex = np.argsort(rollAngle)
-        interpolator = InterpolatedUnivariateSpline(relativeAzimuthTime[sortIndex], rollAngle[sortIndex])
+        sortIndex = np.argsort(relativeAzimuthTime)
+        rollAngleIntp = InterpolatedUnivariateSpline(relativeAzimuthTime[sortIndex], rollAngle[sortIndex])
+        azimuthTimeIntp = self.geolocationGridPointInterpolator(polarization, 'azimuthTime')
+        geolocationGridPoint = self.import_geolocationGridPoint(polarization)
+        line = geolocationGridPoint['line']
+        uniqueLine = np.unique(line)
+        pixel = geolocationGridPoint['pixel']
+        uniquePixel = np.unique(pixel)
+        interpolator = RectBivariateSpline(uniqueLine, uniquePixel,
+                                           rollAngleIntp(azimuthTimeIntp(uniqueLine, uniquePixel)))
+        return interpolator
+            
+    
+    def elevationAntennaPatternInterpolator(self, polarization):
+        elevationAngleIntp = self.geolocationGridPointInterpolator(polarization, 'elevationAngle')
+        #elevationAngleIntp = self.refinedElevationAngleInterpolator(polarization)
+        elevationAngleMap = np.squeeze(elevationAngleIntp(
+                                np.arange(self.shape()[0]), np.arange(self.shape()[1])))
+        rollAngleInterpolator = self.rollAngleInterpolator(polarization)
+        rollAngleMap = np.squeeze(rollAngleInterpolator(
+                           np.arange(self.shape()[0]), np.arange(self.shape()[1])))
+        boresightAngleMap = elevationAngleMap - rollAngleMap
+        del elevationAngleMap, rollAngleMap
+        subswathIndexMap = self.subswathIndexMap(polarization)
+        elevationAntennaPatternMap = np.ones(self.shape())
+        elevationAntennaPatternLUT = self.import_elevationAntennaPattern(polarization)
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            subswathID = '%s%s' % (self.obsMode, iSW)
+            recordLength = len(elevationAntennaPatternLUT[subswathID]['elevationAntennaPattern'])/2
+            angleLUT = ( np.arange(-(recordLength//2),+(recordLength//2)+1)
+                         * elevationAntennaPatternLUT[subswathID]['elevationAngleIncrement'] )
+            amplitudeLUT = np.array(elevationAntennaPatternLUT[subswathID]['elevationAntennaPattern'])
+            amplitudeLUT = np.sqrt(amplitudeLUT[0::2]**2 + amplitudeLUT[1::2]**2)
+            interpolator = InterpolatedUnivariateSpline(angleLUT, np.sqrt(amplitudeLUT))
+            valid = (subswathIndexMap==iSW)
+            elevationAntennaPatternMap[valid] = interpolator(boresightAngleMap)[valid]
+        interpolator = RectBivariateSpline(
+            np.arange(self.shape()[0]), np.arange(self.shape()[1]), elevationAntennaPatternMap)
+        return interpolator
+
+
+    def rangeSpreadingLossInterpolator(self, polarization):
+        rangeSpreadingLoss = ( float(self.annotationXML[polarization].getElementsByTagName(
+                                     'referenceRange')[0].childNodes[0].nodeValue)
+            / np.squeeze(self.geolocationGridPointInterpolator(polarization, 'slantRangeTime')
+                         (np.arange(self.shape()[0]), np.arange(self.shape()[1])))
+            / 299792458. * 2)**(3./2.)
+        interpolator = RectBivariateSpline(
+            np.arange(self.shape()[0]), np.arange(self.shape()[1]), rangeSpreadingLoss)
         return interpolator
 
 
@@ -703,9 +750,202 @@ class Sentinel1Image(Nansat):
         noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
         swathBounds = self.import_swathBounds(polarization)
         subswathIndexMap = self.subswathIndexMap(polarization)
+        #annotatedElevationAngleIntp = self.geolocationGridPointInterpolator(polarization, 'elevationAngle')
+        annotatedElevationAngleIntp = self.refinedElevationAngleInterpolator(polarization)
+        noiseVectorMap = np.ones(self.shape()) * np.nan
+        if lutShift:
+            buf = 300
+            elevationAntennaPatternIntp = self.elevationAntennaPatternInterpolator(polarization)
+            rangeSpreadingLossIntp = self.rangeSpreadingLossInterpolator(polarization)
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                swathBound = swathBounds[subswathID]
+                line = np.array(noiseRangeVector['line'])
+                valid = (   (line >= min(swathBound['firstAzimuthLine']))
+                          * (line <= max(swathBound['lastAzimuthLine'])) )
+                line = line[valid]
+                pixel = np.array(noiseRangeVector['pixel'])[valid]
+                noiseRangeLut = np.array(noiseRangeVector['noiseRangeLut'])[valid]
+                xBins = np.arange(min(swathBound['firstRangeSample']),
+                                  max(swathBound['lastRangeSample']) + 1)
+                zi = np.ones((valid.sum(), len(xBins))) * np.nan
+                for li,y in enumerate(line):
+                    x = np.array(pixel[li])
+                    z = np.array(noiseRangeLut[li])
+                    valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                    if valid.sum()==0:
+                        continue
+                    noiseVector = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins[buf:-buf])
+                    referencePattern = ((1. / elevationAntennaPatternIntp(y,xBins[buf:-buf])
+                                            / rangeSpreadingLossIntp(y,xBins[buf:-buf]))**2).flatten()
+                    annotatedElevationAngle = annotatedElevationAngleIntp(y,xBins[buf:-buf])
+                    xShiftAngle = (annotatedElevationAngle[0,np.argmin(noiseVector)]
+                                   - annotatedElevationAngle[0,np.argmin(referencePattern)])
+                    print('Estimated noise vector shifting for %s, line #%d = %f deg.'
+                          % (subswathID, y, xShiftAngle))
+                    xShiftAngle2Pixel = np.squeeze( xShiftAngle
+                        / np.gradient(np.squeeze(annotatedElevationAngleIntp(y,xBins))) )
+                    zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins + xShiftAngle2Pixel)
+                valid = np.isfinite(np.sum(zi,axis=1))
+                interpFunc = RectBivariateSpline(xBins, line[valid], zi[valid,:].T, kx=1, ky=1)
+                valid = (subswathIndexMap==iSW)
+                noiseVectorMap[valid] = interpFunc(np.arange(self.shape()[1]),
+                                                   np.arange(self.shape()[0])).T[valid]
+        else:
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                swathBound = swathBounds[subswathID]
+                line = np.array(noiseRangeVector['line'])
+                valid = (   (line >= min(swathBound['firstAzimuthLine']))
+                          * (line <= max(swathBound['lastAzimuthLine'])) )
+                line = line[valid]
+                pixel = np.array(noiseRangeVector['pixel'])[valid]
+                noiseRangeLut = np.array(noiseRangeVector['noiseRangeLut'])[valid]
+                xBins = np.arange(min(swathBound['firstRangeSample']),
+                                  max(swathBound['lastRangeSample']) + 1)
+                zi = np.ones((valid.sum(), len(xBins))) * np.nan
+                for li,y in enumerate(line):
+                    x = np.array(pixel[li])
+                    z = np.array(noiseRangeLut[li])
+                    valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                    if valid.sum()==0:
+                        continue
+                    zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins)
+                valid = np.isfinite(np.sum(zi,axis=1))
+                interpFunc = RectBivariateSpline(xBins, line[valid], zi[valid,:].T, kx=1, ky=1)
+                valid = (subswathIndexMap==iSW)
+                noiseVectorMap[valid] = interpFunc(np.arange(self.shape()[1]),
+                                                   np.arange(self.shape()[0])).T[valid]
+        if self.IPFversion >= 2.9:
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                numberOfBlocks = len(noiseAzimuthVector[subswathID]['firstAzimuthLine'])
+                for iBlk in range(numberOfBlocks):
+                    xs = noiseAzimuthVector[subswathID]['firstRangeSample'][iBlk]
+                    xe = noiseAzimuthVector[subswathID]['lastRangeSample'][iBlk]
+                    ys = noiseAzimuthVector[subswathID]['firstAzimuthLine'][iBlk]
+                    ye = noiseAzimuthVector[subswathID]['lastAzimuthLine'][iBlk]
+                    yBins = np.arange(ys, ye+1)
+                    y = noiseAzimuthVector[subswathID]['line'][iBlk]
+                    z = noiseAzimuthVector[subswathID]['noiseAzimuthLut'][iBlk]
+                    if not isinstance(y, list):
+                        noiseVectorMap[yBins, xs:xe+1] *= z
+                    else:
+                        noiseVectorMap[yBins, xs:xe+1] *= \
+                            InterpolatedUnivariateSpline(y, z, k=1)(yBins)[:,np.newaxis] * np.ones(xe-xs+1)
+        return noiseVectorMap
+
+
+    def noiseVectorMap_new_old(self, polarization, lutShift=False):
+        ''' convert noise vectors into full grid pixels '''
+        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
+        swathBounds = self.import_swathBounds(polarization)
+        subswathIndexMap = self.subswathIndexMap(polarization)
+        annotatedElevationAngleIntp = self.geolocationGridPointInterpolator(polarization, 'elevationAngle')
+        noiseVectorMap = np.ones(self.shape()) * np.nan
+        if lutShift:
+            buf = 300
+            elevationAntennaPatternIntp = self.elevationAntennaPatternInterpolator(polarization)
+            rangeSpreadingLossIntp = self.rangeSpreadingLossInterpolator(polarization)
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                swathBound = swathBounds[subswathID]
+                line = np.array(noiseRangeVector['line'])
+                valid = (   (line >= min(swathBound['firstAzimuthLine']))
+                          * (line <= max(swathBound['lastAzimuthLine'])) )
+                line = line[valid]
+                pixel = np.array(noiseRangeVector['pixel'])[valid]
+                noiseRangeLut = np.array(noiseRangeVector['noiseRangeLut'])[valid]
+                xBins = np.arange(min(swathBound['firstRangeSample']),
+                                  max(swathBound['lastRangeSample']) + 1)
+                zi = np.ones((valid.sum(), len(xBins))) * np.nan
+                xShiftAngle = []
+                #xShiftPixel = []
+                for li,y in enumerate(line):
+                    x = np.array(pixel[li])
+                    z = np.array(noiseRangeLut[li])
+                    valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                    if valid.sum()==0:
+                        continue
+                    noiseVector = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins[buf:-buf])
+                    referencePattern = ((1. / elevationAntennaPatternIntp(y,xBins[buf:-buf])
+                                            / rangeSpreadingLossIntp(y,xBins[buf:-buf]))**2).flatten()
+                    annotatedElevationAngle = annotatedElevationAngleIntp(y,xBins[buf:-buf])
+                    xShiftAngle.append(annotatedElevationAngle[0,np.argmin(noiseVector)]
+                                  - annotatedElevationAngle[0,np.argmin(referencePattern)])
+                    #xShiftPixel.append(np.argmin(noiseVector)-np.argmin(referencePattern))
+                xShiftAngle = np.nanmedian(xShiftAngle)
+                #xShiftPixel = np.nanmedian(xShiftPixel)
+                print('Estimated noise vector shifting for %s = %f deg.' % (subswathID, xShiftAngle))
+                #print('Estimated noise vector shifting for %s = %d px' % (subswathID, xShiftPixel))
+                for li,y in enumerate(line):
+                    x = np.array(pixel[li])
+                    z = np.array(noiseRangeLut[li])
+                    valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                    if valid.sum()==0:
+                        continue
+                    xShiftAngle2Pixel = np.squeeze( xShiftAngle
+                        / np.gradient(np.squeeze(annotatedElevationAngleIntp(y,xBins))) )
+                    zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins + xShiftAngle2Pixel)
+                    #zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins + xShiftPixel)
+                valid = np.isfinite(np.sum(zi,axis=1))
+                interpFunc = RectBivariateSpline(xBins, line[valid], zi[valid,:].T, kx=1, ky=1)
+                valid = (subswathIndexMap==iSW)
+                noiseVectorMap[valid] = interpFunc(np.arange(self.shape()[1]),
+                                                   np.arange(self.shape()[0])).T[valid]
+        else:
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                swathBound = swathBounds[subswathID]
+                line = np.array(noiseRangeVector['line'])
+                valid = (   (line >= min(swathBound['firstAzimuthLine']))
+                          * (line <= max(swathBound['lastAzimuthLine'])) )
+                line = line[valid]
+                pixel = np.array(noiseRangeVector['pixel'])[valid]
+                noiseRangeLut = np.array(noiseRangeVector['noiseRangeLut'])[valid]
+                xBins = np.arange(min(swathBound['firstRangeSample']),
+                                  max(swathBound['lastRangeSample']) + 1)
+                zi = np.ones((valid.sum(), len(xBins))) * np.nan
+                for li,y in enumerate(line):
+                    x = np.array(pixel[li])
+                    z = np.array(noiseRangeLut[li])
+                    valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                    if valid.sum()==0:
+                        continue
+                    zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins)
+                valid = np.isfinite(np.sum(zi,axis=1))
+                interpFunc = RectBivariateSpline(xBins, line[valid], zi[valid,:].T, kx=1, ky=1)
+                valid = (subswathIndexMap==iSW)
+                noiseVectorMap[valid] = interpFunc(np.arange(self.shape()[1]),
+                                                   np.arange(self.shape()[0])).T[valid]
+        if self.IPFversion >= 2.9:
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                numberOfBlocks = len(noiseAzimuthVector[subswathID]['firstAzimuthLine'])
+                for iBlk in range(numberOfBlocks):
+                    xs = noiseAzimuthVector[subswathID]['firstRangeSample'][iBlk]
+                    xe = noiseAzimuthVector[subswathID]['lastRangeSample'][iBlk]
+                    ys = noiseAzimuthVector[subswathID]['firstAzimuthLine'][iBlk]
+                    ye = noiseAzimuthVector[subswathID]['lastAzimuthLine'][iBlk]
+                    yBins = np.arange(ys, ye+1)
+                    y = noiseAzimuthVector[subswathID]['line'][iBlk]
+                    z = noiseAzimuthVector[subswathID]['noiseAzimuthLut'][iBlk]
+                    if not isinstance(y, list):
+                        noiseVectorMap[yBins, xs:xe+1] *= z
+                    else:
+                        noiseVectorMap[yBins, xs:xe+1] *= \
+                            InterpolatedUnivariateSpline(y, z, k=1)(yBins)[:,np.newaxis] * np.ones(xe-xs+1)
+        return noiseVectorMap
+
+
+    def noiseVectorMap_old(self, polarization, lutShift=False):
+        ''' convert noise vectors into full grid pixels '''
+        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
+        swathBounds = self.import_swathBounds(polarization)
+        subswathIndexMap = self.subswathIndexMap(polarization)
         noiseVectorMap = np.ones(self.shape()) * np.nan
         annoElevAngleIntp = self.geolocationGridPointInterpolator(polarization, 'elevationAngle')
-        refinedElevAngleIntp = self.elevationAngleInterpolator(polarization)
+        refinedElevAngleIntp = self.refinedElevationAngleInterpolator(polarization)
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             subswathID = '%s%s' % (self.obsMode, iSW)
             swathBound = swathBounds[subswathID]
@@ -777,9 +1017,9 @@ class Sentinel1Image(Nansat):
         return sigma0
 
 
-    def rawNoiseEquivalentSigma0Map(self, polarization):
+    def rawNoiseEquivalentSigma0Map(self, polarization, lutShift=False):
         ''' original annotated noise equivalent sigma nought '''
-        noiseEquivalentSigma0 = (   self.noiseVectorMap(polarization)
+        noiseEquivalentSigma0 = (   self.noiseVectorMap(polarization, lutShift=lutShift)
                                   / np.power(self.calibrationVectorMap(polarization), 2) )
         # pre-scaling is needed for noise vectors when they have very low values
         if 10 * np.log10(np.nanmean(noiseEquivalentSigma0)) < -40:
@@ -902,7 +1142,7 @@ class Sentinel1Image(Nansat):
     def modifiedNoiseEquivalentSigma0Map(self, polarization, localNoisePowerCompensation=False):
         ''' scaled and balanced noise equivalent sigma nought for cross-polarization channgel '''
         # raw noise-equivalent sigma nought
-        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization)
+        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization, lutShift=True)
         meanNESZraw = np.nanmean(noiseEquivalentSigma0)
         # apply scalloping gain to noise-equivalent sigma nought
         if self.IPFversion >= 2.5 and self.IPFversion < 2.9:
@@ -1069,7 +1309,7 @@ class Sentinel1Image(Nansat):
         subswathIndexMap = self.subswathIndexMap(polarization)
         landmask = self.landmask(skipGCP=4)
         sigma0 = self.rawSigma0Map(polarization)
-        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization)
+        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization, lutShift=True)
         if self.IPFversion >= 2.5 and self.IPFversion < 2.9:
             noiseEquivalentSigma0 *= self.scallopingGainMap(polarization)
         validLineIndices = np.argwhere(
@@ -1117,7 +1357,7 @@ class Sentinel1Image(Nansat):
         subswathIndexMap = self.subswathIndexMap(polarization)
         landmask = self.landmask(skipGCP=4)
         sigma0 = self.rawSigma0Map(polarization)
-        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization)
+        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization, lutShift=True)
         if self.IPFversion >= 2.5 and self.IPFversion < 2.9:
             noiseEquivalentSigma0 *= self.scallopingGainMap(polarization)
         rawNoiseEquivalentSigma0 = noiseEquivalentSigma0.copy()
