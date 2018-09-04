@@ -12,12 +12,12 @@ for li, npzFile in enumerate(npzFilesAll):
     startDateTime = datetime.datetime.strptime(npzFile.split('/')[-1][17:32], "%Y%m%dT%H%M%S")
     endDateTime = datetime.datetime.strptime(npzFile.split('/')[-1][33:48], "%Y%m%dT%H%M%S")
     if (     platform=='S1A'
-         and startDateTime >= datetime.datetime(2018,03,13,01,00,42)
-         and endDateTime <= datetime.datetime(2018,03,15,12,00,00) ):
+         and startDateTime >= datetime.datetime(2018,3,13,1,0,42)
+         and endDateTime <= datetime.datetime(2018,3,15,14,1,26) ):
         continue
     elif (     platform=='S1B'
-           and startDateTime >= datetime.datetime(2018,03,13,02,43,05)
-           and endDateTime <= datetime.datetime(2018,03,15,12,00,00) ):
+           and startDateTime >= datetime.datetime(2018,3,13,2,43,5)
+           and endDateTime <= datetime.datetime(2018,3,15,15,19,30) ):
         continue
     else:
         npzFiles.append(npzFile)
@@ -35,6 +35,7 @@ for npzFile in npzFiles:
     if numberOfSubblocks.size != 1:
         print('*** numberOfSubblocks are not consistent for all subswaths.')
         continue
+    numberOfSubblocks = numberOfSubblocks.item()
     for li in range(numberOfSubblocks):
         powerDifference.append([
               np.nanmean(10*np.log10(npz['EW%s' % iSW].item()['sigma0'][li]))
