@@ -782,8 +782,8 @@ class Sentinel1Image(Nansat):
                     xShiftAngle.append(annotatedElevationAngle[0,np.argmin(noiseVector)]
                                        - annotatedElevationAngle[0,np.argmin(referencePattern)])
                 xShiftAngle = np.nanmedian(xShiftAngle)
-                print('Estimated noise vector shifting for the subswath %s: %f deg.'
-                      % (subswathID, xShiftAngle))
+                #print('Estimated noise vector shifting for the subswath %s: %f deg.'
+                #      % (subswathID, xShiftAngle))
                 for li,y in enumerate(line):
                     x = np.array(pixel[li])
                     z = np.array(noiseRangeLut[li])
@@ -1109,85 +1109,6 @@ class Sentinel1Image(Nansat):
             return sigma0
 
 
-    def thermalNoiseRemoval_dev(self, polarization,
-            preserveTotalPower=True, returnNESZ=False, windowSize=25):
-        ''' thermal noise removal under development '''
-        noiseEquivalentSigma0, sigma0 = self.thermalNoiseRemoval(
-            polarization, algorithm='NERSC', localNoisePowerCompensation=False,
-            preserveTotalPower=False, returnNESZ=True )
-        offsetPower = np.nanmean(noiseEquivalentSigma0)
-        subswathIndexMap = self.subswathIndexMap(polarization)
-        noiseVarianceParameters = self.import_denoisingCoefficients(polarization)[3]
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
-            ri = np.where(subswathIndexMap==iSW)[1]
-            riMin, riMax = ri.min(), ri.max()
-            sswS0 = np.copy(sigma0[:,riMin:riMax+1])
-            sswN0 = np.copy(noiseEquivalentSigma0[:,riMin:riMax+1])
-            sswi = np.copy(subswathIndexMap[:,riMin:riMax+1])
-            sswS0[sswi!=iSW] = np.nan
-            sswN0[sswi!=iSW] = np.nan
-            nr = sswS0.shape[1]
-            for li in range(sswS0.shape[0]):
-                fi = np.where(np.isfinite(sswS0[li]))[0]
-                if len(fi)==0:
-                    continue
-                fiMin, fiMax = fi.min(), fi.max()
-                if fiMax!=(nr-1):
-                    sswS0[li][fiMax+1:nr] = sswS0[li][fiMax:fiMax-(nr-fiMax)+1:-1]
-                    sswN0[li][fiMax+1:nr] = sswN0[li][fiMax:fiMax-(nr-fiMax)+1:-1]
-                if fiMin!=0:
-                    sswS0[li][0:fiMin] = sswS0[li][fiMin:fiMin+fiMin]
-                    sswN0[li][0:fiMin] = sswN0[li][fiMin:fiMin+fiMin]
-            sswS0m = convolve(sswS0, np.ones((windowSize,windowSize))/windowSize**2)
-            sswN0m = convolve(sswN0, np.ones((windowSize,windowSize))/windowSize**2)
-            SNNR = (sswS0m + sswN0m) / sswN0m
-            SD = np.sqrt( convolve(sswS0**2, np.ones((windowSize,windowSize))/windowSize**2)
-                          - sswS0m**2 )
-            simSD = noiseVarianceParameters['%s%s' % (self.obsMode, iSW)] * sswN0m * (1./SNNR)
-            sswS0 = (sswS0 - sswS0m) * (1. - simSD / SD) + sswS0m
-            sigma0[subswathIndexMap==iSW] = sswS0[sswi==iSW]
-        if polarization=='HH':
-            swb = self.import_swathBounds('HH')['%s1' % self.obsMode]
-            sw1 = np.vstack([sigma0[fa:la+1,lr-windowSize+1:lr+1] for lr,fa,la in
-                      zip(swb['lastRangeSample'],swb['firstAzimuthLine'],swb['lastAzimuthLine'])])
-            sw2 = np.vstack([sigma0[fa:la+1,lr+1:lr+windowSize+1] for lr,fa,la in
-                      zip(swb['lastRangeSample'],swb['firstAzimuthLine'],swb['lastAzimuthLine'])])
-            sd_ratio = [ np.nanstd(sw2[ri:ri+windowSize,:]) / np.nanstd(sw1[ri:ri+windowSize,:])
-                         for ri in range(len(sw1)-windowSize) ]
-            amp_ratio = [ np.nanmean(sw2[ri:ri+windowSize,:]) / np.nanmean(sw1[ri:ri+windowSize,:])
-                          for ri in range(len(sw1)-windowSize) ]
-            scalingFactor = np.nanmedian(np.array(sd_ratio) / np.array(amp_ratio))
-            print('Computed extra SD scaling factor for %s1 = %f' % (self.obsMode, scalingFactor))
-            if scalingFactor < 1.0 or scalingFactor > 1.2:
-                scalingFactor = 1.15
-            ri = np.where(subswathIndexMap==1)[1]
-            riMin, riMax = ri.min(), ri.max()
-            sswS0 = np.copy(sigma0[:,riMin:riMax+1])
-            sswi = np.copy(subswathIndexMap[:,riMin:riMax+1])
-            sswS0[sswi!=1] = np.nan
-            nr = sswS0.shape[1]
-            for li in range(sswS0.shape[0]):
-                fi = np.where(np.isfinite(sswS0[li]))[0]
-                if len(fi)==0:
-                    continue
-                fiMin, fiMax = fi.min(), fi.max()
-                if fiMax!=(nr-1):
-                    sswS0[li][fiMax+1:nr] = sswS0[li][fiMax:fiMax-(nr-fiMax)+1:-1]
-                if fiMin!=0:
-                    sswS0[li][0:fiMin] = sswS0[li][fiMin:fiMin+fiMin]
-            sswS0m = convolve(sswS0, np.ones((windowSize,windowSize))/windowSize**2)
-            sswS0 = (sswS0 - sswS0m) * scalingFactor + sswS0m
-            sigma0[subswathIndexMap==1] = sswS0[sswi==1]
-        if preserveTotalPower:
-            sigma0 += offsetPower
-        if returnNESZ:
-            # return both noise power and noise-power-subtracted sigma nought
-            return noiseEquivalentSigma0, sigma0
-        else:
-            # return noise power subtracted sigma nought
-            return sigma0
-
-
     def add_denoised_band(self, polarization):
         if not self.has_band('subswath_indices'):
             self.add_band(self.subswathIndexMap(polarization),
@@ -1198,7 +1119,7 @@ class Sentinel1Image(Nansat):
                       parameters={'name': 'NEsigma0_%s' % polarization + '_raw'})
         self.add_band(self.modifiedNoiseEquivalentSigma0Map(polarization, localNoisePowerCompensation=False),
                       parameters={'name': 'NEsigma0_%s' % polarization})
-        denoisedBandArray = self.thermalNoiseRemoval_dev(polarization)
+        denoisedBandArray = self.thermalNoiseRemoval(polarization)
         self.add_band(denoisedBandArray,
                       parameters={'name': 'sigma0_%s' % polarization + '_denoised'})
 
