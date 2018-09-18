@@ -1249,7 +1249,7 @@ class Sentinel1Image(Nansat):
         np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
 
 
-    def experiment_extraScaling(self, polarization, windowSize=25):
+    def experiment_extraScaling_(self, polarization, windowSize=25):
         ''' generate experimental data for extra scaling parameter optimization '''
         clipSidePixels = {'IW':1000, 'EW':250}[self.obsMode]      # 10km
         subswathIndexMap = self.subswathIndexMap(polarization)
@@ -1305,6 +1305,73 @@ class Sentinel1Image(Nansat):
             results[subswathID]['signalPlusNoiseToNoiseRatio'].append(np.nanmean(s0+n0) / np.nanmean(n0))
             results[subswathID]['noiseNormalizedStandardDeviation'].append(np.nanstd(s0) / np.nanmean(n0))
         np.savez(self.name.split('.')[0] + '_extraScaling.npz', **results)
+
+
+    def experiment_extraScaling(self, polarization):
+        ''' generate experimental data for extra scaling parameter optimization '''
+        clipSidePixels = {'IW':1000, 'EW':250}[self.obsMode]      # 10km
+        nBins = 1001
+        windowSizeMin = 3
+        windowSizeMax = 27
+        snnrRange = np.array([0, +4], dtype=np.float)
+        snnrRange = [ snnrRange[0]-(snnrRange[-1]-snnrRange[0])/(nBins-1)/2.,
+                      snnrRange[-1]+(snnrRange[-1]-snnrRange[0])/(nBins-1)/2. ]
+        nnsdRange = np.array([0, +2], dtype=np.float)
+        nnsdRange = [ nnsdRange[0]-(nnsdRange[-1]-nnsdRange[0])/(nBins-1)/2.,
+                      nnsdRange[-1]+(nnsdRange[-1]-nnsdRange[0])/(nBins-1)/2. ]
+        dBsnnrRange = np.array([-5, +5], dtype=np.float)
+        dBsnnrRange = [ dBsnnrRange[0]-(dBsnnrRange[-1]-dBsnnrRange[0])/(nBins-1)/2.,
+                        dBsnnrRange[-1]+(dBsnnrRange[-1]-dBsnnrRange[0])/(nBins-1)/2. ]
+        esfRange = np.array([0, +10], dtype=np.float)
+        esfRange = [ esfRange[0]-(esfRange[-1]-esfRange[0])/(nBins-1)/2.,
+                     esfRange[-1]+(esfRange[-1]-esfRange[0])/(nBins-1)/2. ]
+        subswathIndexMap = self.subswathIndexMap(polarization)
+        noiseEquivalentSigma0, sigma0 = self.thermalNoiseRemoval(
+            polarization, algorithm='NERSC', localNoisePowerCompensation=False,
+            preserveTotalPower=False, returnNESZ=True )
+        windowSizes = np.arange(windowSizeMin,windowSizeMax+1,2)
+        results = { 'extraScalingFactorHistogram': {'%s%s' % (self.obsMode, li):
+                        np.zeros((len(windowSizes), nBins, nBins), dtype=np.int64)
+                        for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1)},
+                    'noiseNormalizedStandardDeviationHistogram': {'%s%s' % (self.obsMode, li):
+                        np.zeros((len(windowSizes), nBins, nBins), dtype=np.int64)
+                        for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1)} }
+        results['IPFversion'] = self.IPFversion
+        results['windowSizes'] = windowSizes
+        results['snnrEdges'] = np.linspace(snnrRange[0], snnrRange[-1], nBins+1)
+        results['nnsdEdges'] = np.linspace(nnsdRange[0], nnsdRange[-1], nBins+1)
+        results['dBsnnrEdges'] = np.linspace(dBsnnrRange[0], dBsnnrRange[-1], nBins+1)
+        results['esfEdges'] = np.linspace(esfRange[0], esfRange[-1], nBins+1)
+        for li, windowSize in enumerate(windowSizes):
+            kernelMean = np.ones((windowSize,windowSize)) / windowSize**2
+            meanNoise = convolve(noiseEquivalentSigma0, kernelMean)
+            meanSignal = convolve(sigma0, kernelMean)
+            meanSubswathIndexMap = convolve(subswathIndexMap.astype(np.float), kernelMean)
+            signalPlusNoiseToNoiseRatio = (meanSignal + meanNoise) / meanNoise
+            standardDeviation = np.sqrt(convolve(sigma0**2, kernelMean) - meanSignal**2)
+            noiseNormalizedStandardDeviation = standardDeviation / meanNoise
+            kernelSum = np.ones((windowSize,windowSize))
+            numberOfPositives = convolve((sigma0 > 0).astype(np.float), kernelSum)
+            sumSignal = meanSignal * windowSize**2
+            sumNoise = meanNoise * windowSize**2
+            sumZeroClippedSignal = convolve(np.where(sigma0 > 0, sigma0, 0), kernelSum)
+            extraScalingFactor = 1 + ( (sumZeroClippedSignal-sumSignal) / sumNoise
+                                       * (windowSize**2 / numberOfPositives) )
+            extraScalingFactor[numberOfPositives==0] = np.nan
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                valid = (abs(meanSubswathIndexMap - iSW) < (1/windowSize/2))
+                valid[:clipSidePixels,:] = False
+                valid[-clipSidePixels:,:] = False
+                valid[:,:clipSidePixels] = False
+                valid[:,-clipSidePixels:] = False
+                results['noiseNormalizedStandardDeviationHistogram'][subswathID][li] = np.histogram2d(
+                    signalPlusNoiseToNoiseRatio[valid], noiseNormalizedStandardDeviation[valid],
+                    bins=nBins, range=[snnrRange, nnsdRange])[0]
+                results['extraScalingFactorHistogram'][subswathID][li] = np.histogram2d(
+                    10*np.log10(signalPlusNoiseToNoiseRatio[valid]), extraScalingFactor[valid],
+                    bins=nBins, range=[dBsnnrRange, esfRange])[0]
+        np.savez_compressed(self.name.split('.')[0] + '_extraScaling.npz', **results)
 
 
     def landmask(self, skipGCP=4):
