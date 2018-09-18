@@ -1249,64 +1249,6 @@ class Sentinel1Image(Nansat):
         np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
 
 
-    def experiment_extraScaling_(self, polarization, windowSize=25):
-        ''' generate experimental data for extra scaling parameter optimization '''
-        clipSidePixels = {'IW':1000, 'EW':250}[self.obsMode]      # 10km
-        subswathIndexMap = self.subswathIndexMap(polarization)
-        noiseEquivalentSigma0, sigma0 = self.thermalNoiseRemoval(
-            polarization, algorithm='NERSC', localNoisePowerCompensation=False,
-            preserveTotalPower=False, returnNESZ=True )
-        numberOfAzimuthBlocks = self.shape()[0] // windowSize
-        numberOfRangeBlocks = (self.shape()[1] - 2*clipSidePixels) // windowSize
-        numberOfBlocks = numberOfAzimuthBlocks * numberOfRangeBlocks
-        sigma0 = sigma0[
-            :numberOfAzimuthBlocks*windowSize,
-            clipSidePixels:clipSidePixels+numberOfRangeBlocks*windowSize]
-        sigma0 = [ sigma0[ri*windowSize:(ri+1)*windowSize,
-                          ci*windowSize:(ci+1)*windowSize]
-                   for (ri,ci) in np.ndindex(numberOfAzimuthBlocks,
-                                             numberOfRangeBlocks)  ]
-        noiseEquivalentSigma0 = noiseEquivalentSigma0[
-            :numberOfAzimuthBlocks*windowSize,
-            clipSidePixels:clipSidePixels+numberOfRangeBlocks*windowSize]
-        noiseEquivalentSigma0 = [
-            noiseEquivalentSigma0[ri*windowSize:(ri+1)*windowSize,
-                                  ci*windowSize:(ci+1)*windowSize]
-            for (ri,ci) in np.ndindex(numberOfAzimuthBlocks,
-                                      numberOfRangeBlocks)  ]
-        subswathIndexMap = subswathIndexMap[
-            :numberOfAzimuthBlocks*windowSize,
-            clipSidePixels:clipSidePixels+numberOfRangeBlocks*windowSize]
-        subswathIndexMap = [
-            subswathIndexMap[ri*windowSize:(ri+1)*windowSize,
-                             ci*windowSize:(ci+1)*windowSize]
-            for (ri,ci) in np.ndindex(numberOfAzimuthBlocks,
-                                      numberOfRangeBlocks)  ]
-        results = { '%s%s' % (self.obsMode, li):
-            { 'extraScalingFactor':[], 'signalPlusNoiseToNoiseRatio':[],
-              'noiseNormalizedStandardDeviation':[] }
-            for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
-        results['IPFversion'] = self.IPFversion
-        zipped = zip(sigma0, noiseEquivalentSigma0, subswathIndexMap)
-        for s0, n0, ind in zipped:
-            uniqueIndex = np.unique(ind)
-            if uniqueIndex.size!=1 or uniqueIndex==0:
-                continue
-            iSW = uniqueIndex.item()
-            subswathID = '%s%s' % (self.obsMode, iSW)
-            numberOfPositives = (s0 > 0).sum()
-            zeroClipped = np.where(s0 >= 0, s0, 0)
-            if numberOfPositives:
-                alpha = 1 + ( np.nansum(zeroClipped-s0) / np.nansum(n0)
-                              * (windowSize**2 / float(numberOfPositives)) )
-            else:
-                alpha = np.nan
-            results[subswathID]['extraScalingFactor'].append(alpha)
-            results[subswathID]['signalPlusNoiseToNoiseRatio'].append(np.nanmean(s0+n0) / np.nanmean(n0))
-            results[subswathID]['noiseNormalizedStandardDeviation'].append(np.nanstd(s0) / np.nanmean(n0))
-        np.savez(self.name.split('.')[0] + '_extraScaling.npz', **results)
-
-
     def experiment_extraScaling(self, polarization):
         ''' generate experimental data for extra scaling parameter optimization '''
         clipSidePixels = {'IW':1000, 'EW':250}[self.obsMode]      # 10km
