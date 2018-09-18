@@ -33,12 +33,14 @@ nnsdHist = {'EW%s' % li: np.zeros((len(windowSizes), nBins, nBins), dtype=np.int
 esfHist = {'EW%s' % li: np.zeros((len(windowSizes), nBins, nBins), dtype=np.int64)
            for li in range(1,6)}
 for li, npzFile in enumerate(npzFiles):
+    sys.stdout.write('\rStacking ... %5d / %5d' % (li+1,len(npzFiles)))
+    sys.stdout.flush()
     npz = np.load(npzFile)
+    nnsdHistTmp = npz['noiseNormalizedStandardDeviationHistogram'].item()
+    esfHistTmp = npz['extraScalingFactorHistogram'].item()
     for iSW in range(1,6):
-        nnsdHist['EW%s' % iSW] += np.transpose(
-            npz['noiseNormalizedStandardDeviationHistogram'].item()['EW%s' % iSW], axes=(0,2,1))
-        esfHist['EW%s' % iSW] += np.transpose(
-            npz['extraScalingFactorHistogram'].item()['EW%s' % iSW], axes=(0,2,1))
+        nnsdHist['EW%s' % iSW] += np.transpose(nnsdHistTmp['EW%s' % iSW], axes=(0,2,1))
+        esfHist['EW%s' % iSW] += np.transpose(esfHistTmp['EW%s' % iSW], axes=(0,2,1))
 np.savez_compressed(platform+'_extraScaling.npz', windowSizes=windowSizes,
                     snnrEdges=snnrEdges, nnsdEdges=nnsdEdges, nnsdHist=nnsdHist,
                     dBsnnrEdges=dBsnnrEdges, esfEdges=esfEdges, esfHist=esfHist)
