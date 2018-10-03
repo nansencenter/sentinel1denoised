@@ -54,8 +54,8 @@ nBins = len(snnrEdges)-1
 fitValue = {'EW%s' % li:np.zeros(windowSizes.shape) for li in range(1,6)}
 fitRMSE = {'EW%s' % li:np.zeros(windowSizes.shape) for li in range(1,6)}
 modelCoeffs = {'EW%s' % li:[] for li in range(1,6)}
-def modelFunction(x, a, b, c, d, g):
-    return ( (a-d) / ( (1+( (x/c)** b )) **g) ) + d
+modelFunctionString = "def modelFunction(x, a, b, c, d, g): return ( (a-d) / ( (1+( (x/c)** b )) **g) ) + d"
+exec(modelFunctionString)
 noiseVarianceParameters = {'EW%s' % li: {} for li in range(1,6)}
 for iSW in range(1,6):
     nnsdHist = npz['nnsdHist'].item()['EW%s' % iSW]
@@ -76,16 +76,11 @@ for iSW in range(1,6):
         fitValue['EW%s' % iSW][li] = np.polyval(pfit[0], 1.0)
         fitRMSE['EW%s' % iSW][li] = np.sqrt(np.sum((w/w.sum())*(y-np.polyval(pfit[0], x))**2))
     modelCoeffs['EW%s' % iSW], pcov = curve_fit(
-        modelFunction, windowSizes, fitValue['EW%s' % iSW], sigma=fitRMSE['EW%s' % iSW])
+        modelFunction, windowSizes, fitValue['EW%s' % iSW], sigma=fitRMSE['EW%s' % iSW], maxfev=100000)
     noiseVarianceParameters['EW%s' % iSW] = modelCoeffs['EW%s' % iSW][3]
-    '''
-    plt.figure()
-    windowSizesInterpolated = np.linspace(windowSizes[0], windowSizes[-1], len(windowSizes)*10)
-    plt.errorbar(windowSizes, fitValue['EW%s' % iSW], yerr=fitRMSE['EW%s' % iSW], fmt='s')
-    plt.plot(windowSizesInterpolated, modelFunction(windowSizesInterpolated, *modelCoeffs['EW%s' % iSW]))
-    '''
-np.savez(platform+'_nnsd_results.npz',
-         windowSizes=windowSizes, fitValue=fitValue, fitRMSE=fitRMSE, modelCoeffs=modelCoeffs)
+np.savez_compressed(platform+'_nnsd_results.npz',
+         modelFunctionString=modelFunctionString, modelCoeffs=modelCoeffs,
+         windowSizes=windowSizes, fitValue=fitValue, fitRMSE=fitRMSE)
 
 
 npz = np.load(platform+'_extraScaling.npz')
@@ -123,4 +118,4 @@ for iSW in range(1,6):
         fitRMSE['EW%s' % iSW][li] = np.sqrt(np.sum((w/w.sum())*(y-modelFunction(x, *popt))**2))
     extraScalingParameters['EW%s' % iSW] = np.sum(
         fitValue['EW%s' % iSW].T * (1/fitRMSE['EW%s' % iSW]) / sum(1/fitRMSE['EW%s' % iSW]),axis=1)
-np.savez(platform+'_esf_results.npz', extraScalingParameters=extraScalingParameters)
+np.savez_compressed(platform+'_esf_results.npz', extraScalingParameters=extraScalingParameters)
