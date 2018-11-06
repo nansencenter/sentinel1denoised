@@ -305,9 +305,6 @@ class Sentinel1Image(Nansat):
         extraScalingParameters = {}
         extraScalingParameters['SNR'] = []
         noiseVarianceParameters = {}
-        versionsInLUT = list(denoisingParameters['noiseScalingParameters'].item()['%s1' % self.obsMode].keys())
-        closestIPFversion = float(
-            versionsInLUT[np.argmin(abs(self.IPFversion - np.array(versionsInLUT, dtype=np.float)))])
         IPFversion = float(self.IPFversion)
         sensingDate = datetime.strptime(self.filename.split('/')[-1].split('_')[4], '%Y%m%dT%H%M%S')
         if satID=='S1B' and IPFversion==2.72 and sensingDate >= datetime(2017,1,16,13,42,34):
@@ -323,13 +320,11 @@ class Sentinel1Image(Nansat):
                         denoisingParameters['noiseScalingParameters'].item()
                         [subswathID]['%.1f' % IPFversion] )
                 except:
-                    print('WARNING: noise scaling parameters for IPF version %s are missing.\n'
-                          '         parameters for IPF version %s will be used for now.'
-                          % (IPFversion, closestIPFversion))
-                    noiseScalingParameters[subswathID] = (
-                        denoisingParameters['noiseScalingParameters'].item()
-                        [subswathID]['%.1f' % closestIPFversion] )
+                    print('WARNING: noise scaling parameters for subswath %s (IPF:%s) is missing.'
+                          % (subswathID, self.IPFversion))
+                    noiseScalingParameters[subswathID] = 1.0
             else:
+                print('WARNING: noiseScalingParameters field is missing.')
                 noiseScalingParameters[subswathID] = 1.0
             if 'powerBalancingParameters' in denoisingParameters.keys():
                 try:
@@ -337,26 +332,37 @@ class Sentinel1Image(Nansat):
                         denoisingParameters['powerBalancingParameters'].item()
                         [subswathID]['%.1f' % IPFversion] )
                 except:
-                    print('WARNING: power balancing parameters for IPF version %s are missing.\n'
-                          '         parameters for IPF version %s will be used for now.'
-                          % (IPFversion, closestIPFversion))
-                    powerBalancingParameters[subswathID] = (
-                        denoisingParameters['powerBalancingParameters'].item()
-                        [subswathID]['%.1f' % closestIPFversion] )
+                    print('WARNING: power balancing parameters for subswath %s (IPF:%s) is missing.'
+                          % (subswathID, self.IPFversion))
+                    powerBalancingParameters[subswathID] = 0.0
             else:
+                print('WARNING: powerBalancingParameters field is missing.')
                 powerBalancingParameters[subswathID] = 0.0
             if 'extraScalingParameters' in denoisingParameters.keys():
-                extraScalingParameters[subswathID] = np.array(
-                    denoisingParameters['extraScalingParameters'].item()[subswathID] )
-                extraScalingParameters['SNR'] = np.array(
-                    denoisingParameters['extraScalingParameters'].item()['SNNR'] )
+                try:
+                    extraScalingParameters[subswathID] = np.array(
+                        denoisingParameters['extraScalingParameters'].item()[subswathID] )
+                    extraScalingParameters['SNR'] = np.array(
+                        denoisingParameters['extraScalingParameters'].item()['SNNR'] )
+                except:
+                    print('WARNING: extra scaling parameters for subswath %s (IPF:%s) is missing.'
+                          % (subswathID, self.IPFversion))
+                    extraScalingParameters['SNNR'] = np.linspace(-30,+30,601)
+                    extraScalingParameters[subswathID] = np.ones(601)
             else:
+                print('WARNING: extraScalingParameters field is missing.')
                 extraScalingParameters['SNNR'] = np.linspace(-30,+30,601)
                 extraScalingParameters[subswathID] = np.ones(601)
             if 'noiseVarianceParameters' in denoisingParameters.keys():
-                noiseVarianceParameters[subswathID] = (
-                    denoisingParameters['noiseVarianceParameters'].item()[subswathID] )
+                try:
+                    noiseVarianceParameters[subswathID] = (
+                        denoisingParameters['noiseVarianceParameters'].item()[subswathID] )
+                except:
+                    print('WARNING: noise variance parameters for subswath %s (IPF:%s) is missing.'
+                          % (subswathID, self.IPFversion))
+                    noiseVarianceParameters[subswathID] = 0.0
             else:
+                print('WARNING: noiseVarianceParameters field is missing.')
                 noiseVarianceParameters[subswathID] = 0.0
         return noiseScalingParameters, powerBalancingParameters, extraScalingParameters, noiseVarianceParameters
 
@@ -1035,7 +1041,7 @@ class Sentinel1Image(Nansat):
             subswathIndexMap, np.ones((windowSize,windowSize)) / windowSize**2.,
             mode='constant', cval=0.0 )
         SNR = 10 * np.log10(meanSigma0 / meanNEsigma0 - 1)
-        for iSW in range(1,6):
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             interpFunc = InterpolatedUnivariateSpline(
                              extraScalingParameters['SNR'],
                              extraScalingParameters['%s%s' % (self.obsMode, iSW)], k=3)
@@ -1059,7 +1065,7 @@ class Sentinel1Image(Nansat):
         noiseScalingParameters, powerBalancingParameters, extraScalingParameters = (
             self.import_denoisingCoefficients(polarization)[:3] )
         # apply noise scaling and power balancing to noise-equivalent sigma nought
-        for iSW in range(1,6):
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             valid = (subswathIndexMap==iSW)
             noiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
             noiseEquivalentSigma0[valid] += powerBalancingParameters['%s%s' % (self.obsMode, iSW)]
