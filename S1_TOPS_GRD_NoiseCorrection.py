@@ -786,6 +786,7 @@ class Sentinel1Image(Nansat):
                     x = np.array(pixel[li])
                     z = np.array(noiseRangeLut[li])
                     valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                    valid[np.gradient(x)==0] = False
                     if valid.sum()==0:
                         continue
                     noiseVector = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins[buf:-buf])
@@ -801,6 +802,7 @@ class Sentinel1Image(Nansat):
                     x = np.array(pixel[li])
                     z = np.array(noiseRangeLut[li])
                     valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                    valid[np.gradient(x)==0] = False
                     if valid.sum()==0:
                         continue
                     annotatedElevationAngle = annotatedElevationAngleIntp(y,xBins[buf:-buf])
@@ -829,6 +831,7 @@ class Sentinel1Image(Nansat):
                     x = np.array(pixel[li])
                     z = np.array(noiseRangeLut[li])
                     valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                    valid[np.gradient(x)==0] = False
                     if valid.sum()==0:
                         continue
                     zi[li,:] = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins)
@@ -881,6 +884,7 @@ class Sentinel1Image(Nansat):
                 x = np.array(pixel[li])
                 z = np.array(noiseRangeLut[li])
                 valid = (subswathIndexMap[y,x]==iSW) * (z > 0)
+                valid[np.gradient(x)==0] = False
                 if valid.sum()==0:
                     continue
                 # noiseLut shifting
@@ -1233,9 +1237,6 @@ class Sentinel1Image(Nansat):
                 meanS0 = np.nanmean(np.where(blockSWI==iSW, blockS0, np.nan), axis=0)[pixelIndex]
                 meanN0 = np.nanmean(np.where(blockSWI==iSW, blockN0, np.nan), axis=0)[pixelIndex]
                 meanRawN0 = np.nanmean(np.where(blockSWI==iSW, blockRawN0, np.nan), axis=0)[pixelIndex]
-                #weight = abs(np.gradient(meanN0))
-                #weight = weight / weight.sum() * np.sqrt(len(weight))
-                #fitResults = np.polyfit(pixelIndex, meanS0 - meanN0, w=weight, deg=1, full=True)
                 fitResults = np.polyfit(pixelIndex, meanS0 - meanN0, deg=1, full=True)
                 fitCoefficients.append(fitResults[0])
                 results[subswathID]['sigma0'].append(meanS0)
