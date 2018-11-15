@@ -120,7 +120,8 @@ class Sentinel1Image(Nansat):
         if zipfile.is_zipfile(self.filename):
             zf = zipfile.PyZipFile(self.filename)
             annotationFiles = [fn for fn in zf.namelist() if 'annotation/s1' in fn]
-            calibrationFiles = [fn for fn in zf.namelist() if 'annotation/calibration/calibration-s1' in fn]
+            calibrationFiles = [fn for fn in zf.namelist()
+                                if 'annotation/calibration/calibration-s1' in fn]
             noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
             for polarization in [txPol + 'H', txPol + 'V']:
                 self.annotationXML[polarization] = parseString(
@@ -129,12 +130,15 @@ class Sentinel1Image(Nansat):
                     [zf.read(fn) for fn in calibrationFiles if polarization.lower() in fn][0])
                 self.noiseXML[polarization] = parseString(
                     [zf.read(fn) for fn in noiseFiles if polarization.lower() in fn][0])
-            self.manifestXML = parseString(zf.read([fn for fn in zf.namelist() if 'manifest.safe' in fn][0]))
+            self.manifestXML = parseString(zf.read([fn for fn in zf.namelist()
+                                                    if 'manifest.safe' in fn][0]))
             zf.close()
         else:
             annotationFiles = [fn for fn in glob.glob(self.filename+'/annotation/*') if 's1' in fn]
-            calibrationFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*') if 'calibration-s1' in fn]
-            noiseFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*') if 'noise-s1' in fn]
+            calibrationFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
+                                if 'calibration-s1' in fn]
+            noiseFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
+                          if 'noise-s1' in fn]
             for polarization in [txPol + 'H', txPol + 'V']:
                 self.annotationXML[polarization] = parseString(
                     [open(fn).read() for fn in annotationFiles if polarization.lower() in fn][0])
@@ -155,11 +159,13 @@ class Sentinel1Image(Nansat):
         elif 2.43 <= self.IPFversion < 2.53:
             print('\nWARNING: IPF version of input image is lower than 2.53! '
                   'Noise correction result can be wrong.\n')
-        resourceList = self.manifestXML.getElementsByTagName('resource')
+        if self.manifestXML.getElementsByTagName('safe:facility')[0].attributes['name'].value=='KSAT':
+            resourceList = self.manifestXML.getElementsByTagName('safe:resource')
+        else:
+            resourceList = self.manifestXML.getElementsByTagName('resource')
         for resource in resourceList:
             if resource.attributes['role'].value=='AUX_CAL':
                 auxCalibFilename = resource.attributes['name'].value.split('/')[-1]
-
         self.set_aux_data_dir()
         self.download_aux_calibration(auxCalibFilename, self.platform.lower())
         self.auxiliaryCalibrationXML = parse(self.auxiliaryCalibration_file)
@@ -177,7 +183,8 @@ class Sentinel1Image(Nansat):
         cal_file_tgz = os.path.join(self.aux_data_dir, filename + '.TGZ')
         if not os.path.exists(cal_file):
             parts = filename.split('_')
-            cal_url = 'https://qc.sentinel1.eo.esa.int/product/%s/%s_%s/%s/%s.TGZ' %(parts[0], parts[1], parts[2], parts[3][1:], filename)
+            cal_url = ('https://qc.sentinel1.eo.esa.int/product/%s/%s_%s/%s/%s.TGZ'
+                       % (parts[0], parts[1], parts[2], parts[3][1:], filename))
             r = requests.get(cal_url, stream=True)
             with open(cal_file_tgz, "wb") as f:
                 f.write(r.content)
@@ -1337,4 +1344,37 @@ class Sentinel1Image(Nansat):
         landmask = (self.watermask(tps=True)[1]==2)
         dummy = self.vrt.dataset.SetGCPs(originalGCPs,projectionInfo)
         return landmask
+
+
+    def coefficient_of_variation(self, polarization, windowSize=25):
+        sigma0 = self.rawSigma0Map(polarization)
+        sigma0[sigma0==0] = np.nan
+        subswathIndexMap = self.subswathIndexMap(polarization)
+        result = np.ones_like(sigma0) * np.nan
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            sswID = '%s%s' % (self.obsMode, iSW)
+            ri = np.where(subswathIndexMap==iSW)[1]
+            riMin, riMax = ri.min(), ri.max()
+            sswS0 = np.copy(sigma0[:,riMin:riMax+1])
+            sswi = np.copy(subswathIndexMap[:,riMin:riMax+1])
+            sswS0[sswi!=iSW] = np.nan
+            nr = sswS0.shape[1]
+            for li in range(sswS0.shape[0]):
+                fi = np.where(np.isfinite(sswS0[li]))[0]
+                if len(fi)==0:
+                    continue
+                fiMin, fiMax = fi.min(), fi.max()
+                if fiMax!=(nr-1):
+                    sswS0[li][fiMax+1:nr] = sswS0[li][fiMax:fiMax-(nr-fiMax)+1:-1]
+                if fiMin!=0:
+                    sswS0[li][0:fiMin] = sswS0[li][fiMin:fiMin+fiMin]
+            sswS0m = convolve(sswS0, np.ones((windowSize,windowSize))/windowSize**2)
+            sswSD = np.sqrt( convolve(sswS0**2, np.ones((windowSize,windowSize))/windowSize**2)
+                             - sswS0m**2 )
+            if iSW==1:
+                noiseScalingParameters = self.import_denoisingCoefficients(polarization)[0]
+                sswSD *= np.sqrt(noiseScalingParameters[sswID])
+            result[subswathIndexMap==iSW] = (sswSD/sswS0m)[sswi==iSW]
+        return result
+
 
