@@ -159,10 +159,9 @@ class Sentinel1Image(Nansat):
         elif 2.43 <= self.IPFversion < 2.53:
             print('\nWARNING: IPF version of input image is lower than 2.53! '
                   'Noise correction result can be wrong.\n')
-        if self.manifestXML.getElementsByTagName('safe:facility')[0].attributes['name'].value=='KSAT':
+        resourceList = self.manifestXML.getElementsByTagName('resource')
+        if resourceList==[]:
             resourceList = self.manifestXML.getElementsByTagName('safe:resource')
-        else:
-            resourceList = self.manifestXML.getElementsByTagName('resource')
         for resource in resourceList:
             if resource.attributes['role'].value=='AUX_CAL':
                 auxCalibFilename = resource.attributes['name'].value.split('/')[-1]
