@@ -97,12 +97,15 @@ def planar_rotation(rotAxis, inputVec, rotAngle):
     return outputVec
 
 
-def integer_shift(reference, test):
+def est_shift(reference, test, samplingRate=10):
     lags = np.arange(len(test) - len(reference) + 1)
     cc = np.zeros(len(lags))
     for li, lag in enumerate(lags):
         cc[li] = np.corrcoef(reference, test[lag:lag+len(reference)])[0,1]
-    return np.argmax(cc)
+    x = np.arange(len(cc))
+    xi = np.linspace(0, len(cc), (len(cc)-1) * samplingRate +1)
+    cci = InterpolatedUnivariateSpline(x, cc)(xi)
+    return xi[np.argmax(cci)] - len(cc)//2
 
 
 
@@ -311,9 +314,8 @@ class Sentinel1Image(Nansat):
     def import_denoisingCoefficients(self, polarization):
         ''' import denoising coefficients '''
         satID = self.filename.split('/')[-1][:3]
-        denoisingParameters = np.load( os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), 'denoising_parameters_%s.npz' % satID),
-            encoding='latin1' )
+        denoParams = np.load(os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             'denoising_parameters_%s.npz' % satID))[polarization].item()
         noiseScalingParameters = {}
         powerBalancingParameters = {}
         extraScalingParameters = {}
@@ -328,11 +330,10 @@ class Sentinel1Image(Nansat):
             IPFversion = 2.8
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             subswathID = '%s%s' % (self.obsMode, iSW)
-            if 'noiseScalingParameters' in denoisingParameters.keys():
+            if 'noiseScalingParameters' in denoParams.keys():
                 try:
                     noiseScalingParameters[subswathID] = (
-                        denoisingParameters['noiseScalingParameters'].item()
-                        [subswathID]['%.1f' % IPFversion] )
+                        denoParams['noiseScalingParameters'][subswathID]['%.1f' % IPFversion])
                 except:
                     print('WARNING: noise scaling parameters for subswath %s (IPF:%s) is missing.'
                           % (subswathID, self.IPFversion))
@@ -340,11 +341,10 @@ class Sentinel1Image(Nansat):
             else:
                 print('WARNING: noiseScalingParameters field is missing.')
                 noiseScalingParameters[subswathID] = 1.0
-            if 'powerBalancingParameters' in denoisingParameters.keys():
+            if 'powerBalancingParameters' in denoParams.keys():
                 try:
                     powerBalancingParameters[subswathID] = (
-                        denoisingParameters['powerBalancingParameters'].item()
-                        [subswathID]['%.1f' % IPFversion] )
+                        denoParams['powerBalancingParameters'][subswathID]['%.1f' % IPFversion])
                 except:
                     print('WARNING: power balancing parameters for subswath %s (IPF:%s) is missing.'
                           % (subswathID, self.IPFversion))
@@ -352,12 +352,12 @@ class Sentinel1Image(Nansat):
             else:
                 print('WARNING: powerBalancingParameters field is missing.')
                 powerBalancingParameters[subswathID] = 0.0
-            if 'extraScalingParameters' in denoisingParameters.keys():
+            if 'extraScalingParameters' in denoParams.keys():
                 try:
-                    extraScalingParameters[subswathID] = np.array(
-                        denoisingParameters['extraScalingParameters'].item()[subswathID] )
-                    extraScalingParameters['SNR'] = np.array(
-                        denoisingParameters['extraScalingParameters'].item()['SNNR'] )
+                    extraScalingParameters[subswathID] = (
+                        denoParams['extraScalingParameters'][subswathID])
+                    extraScalingParameters['SNR'] = (
+                        denoParams['extraScalingParameters']['SNNR'])
                 except:
                     print('WARNING: extra scaling parameters for subswath %s (IPF:%s) is missing.'
                           % (subswathID, self.IPFversion))
@@ -367,10 +367,10 @@ class Sentinel1Image(Nansat):
                 print('WARNING: extraScalingParameters field is missing.')
                 extraScalingParameters['SNNR'] = np.linspace(-30,+30,601)
                 extraScalingParameters[subswathID] = np.ones(601)
-            if 'noiseVarianceParameters' in denoisingParameters.keys():
+            if 'noiseVarianceParameters' in denoParams.keys():
                 try:
                     noiseVarianceParameters[subswathID] = (
-                        denoisingParameters['noiseVarianceParameters'].item()[subswathID] )
+                        denoParams['noiseVarianceParameters'][subswathID] )
                 except:
                     print('WARNING: noise variance parameters for subswath %s (IPF:%s) is missing.'
                           % (subswathID, self.IPFversion))
@@ -773,7 +773,7 @@ class Sentinel1Image(Nansat):
         return interpolator
 
 
-    def noiseVectorMap(self, polarization, lutShift=False):
+    def noiseVectorMap_old(self, polarization, lutShift=False):
         ''' convert noise vectors into full grid pixels '''
         noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
         swathBounds = self.import_swathBounds(polarization)
@@ -874,7 +874,7 @@ class Sentinel1Image(Nansat):
         return noiseVectorMap
 
 
-    def noiseVectorMap_ng(self, polarization, lutShift=False):
+    def noiseVectorMap(self, polarization, lutShift=False):
         ''' convert noise vectors into full grid pixels '''
         noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
         swathBounds = self.import_swathBounds(polarization)
@@ -907,13 +907,14 @@ class Sentinel1Image(Nansat):
                         continue
                     referencePattern = ((1. / elevationAntennaPatternIntp(y, xBins[buf:-buf])
                                             / rangeSpreadingLossIntp(y, xBins[buf:-buf]))**2).flatten()
-                    xShiftPixel, deltaShift, ni = 0, 0, 0
-                    while deltaShift!=0 or ni==0:
+                    xShiftPixel, deltaShift, ni = 0, np.inf, 0
+                    zInterpolator = InterpolatedUnivariateSpline(x[valid], z[valid])
+                    while deltaShift > 1e-2 and ni < 10:
                         ni += 1
-                        noiseVector = InterpolatedUnivariateSpline(x[valid], z[valid])(xBins + xShiftPixel)
-                        deltaShift = integer_shift(referencePattern, noiseVector) - buf
+                        noiseVector = zInterpolator(xBins + xShiftPixel)
+                        deltaShift = est_shift(referencePattern, noiseVector)
                         xShiftPixel += deltaShift
-                    #print(iSW, y, xShiftPixel)
+                    #print(iSW, y, ni, xShiftPixel)
                     medianElevationAngleIncrement = np.mean(np.diff(annotatedElevationAngleIntp(y,xBins)))
                     xShiftAngle = medianElevationAngleIncrement * xShiftPixel
                     xShiftPixel = np.squeeze( xShiftAngle
@@ -1123,7 +1124,6 @@ class Sentinel1Image(Nansat):
         ''' scaled and balanced noise equivalent sigma nought for cross-polarization channgel '''
         # raw noise-equivalent sigma nought
         noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization, lutShift=True)
-        meanNESZraw = np.nanmean(noiseEquivalentSigma0)
         # apply scalloping gain to noise-equivalent sigma nought
         if self.IPFversion >= 2.5 and self.IPFversion < 2.9:
             noiseEquivalentSigma0 *= self.scallopingGainMap(polarization)
@@ -1137,9 +1137,6 @@ class Sentinel1Image(Nansat):
             valid = (subswathIndexMap==iSW)
             noiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
             noiseEquivalentSigma0[valid] += powerBalancingParameters['%s%s' % (self.obsMode, iSW)]
-        meanNESZmodified = np.nanmean(noiseEquivalentSigma0)
-        # total noise power should be preserved
-        #noiseEquivalentSigma0 += (meanNESZraw - meanNESZmodified)
         # apply extra noise scaling for compensating local residual noise power
         if localNoisePowerCompensation and (polarization=='HV' or polarization=='VH'):
             sigma0 = self.rawSigma0Map(polarization)
@@ -1175,6 +1172,9 @@ class Sentinel1Image(Nansat):
         if algorithm=='ESA':
             # ESA SNAP S1TBX-like implementation (zero-clipping) for pixels with negative power
             sigma0[sigma0 < 0] = 0
+        elif algorithm=='NERSC':
+            sigma0[rawSigma0==0] = np.nan
+            sigma0[rawSigma0 < 1e-4] = np.nan
         if returnNESZ:
             # return both noise power and noise-power-subtracted sigma nought
             return noiseEquivalentSigma0, sigma0
@@ -1402,37 +1402,5 @@ class Sentinel1Image(Nansat):
         landmask = (self.watermask(tps=True)[1]==2)
         dummy = self.vrt.dataset.SetGCPs(originalGCPs,projectionInfo)
         return landmask
-
-
-    def coefficient_of_variation(self, polarization, windowSize=25):
-        sigma0 = self.rawSigma0Map(polarization)
-        sigma0[sigma0==0] = np.nan
-        subswathIndexMap = self.subswathIndexMap(polarization)
-        result = np.ones_like(sigma0) * np.nan
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
-            sswID = '%s%s' % (self.obsMode, iSW)
-            ri = np.where(subswathIndexMap==iSW)[1]
-            riMin, riMax = ri.min(), ri.max()
-            sswS0 = np.copy(sigma0[:,riMin:riMax+1])
-            sswi = np.copy(subswathIndexMap[:,riMin:riMax+1])
-            sswS0[sswi!=iSW] = np.nan
-            nr = sswS0.shape[1]
-            for li in range(sswS0.shape[0]):
-                fi = np.where(np.isfinite(sswS0[li]))[0]
-                if len(fi)==0:
-                    continue
-                fiMin, fiMax = fi.min(), fi.max()
-                if fiMax!=(nr-1):
-                    sswS0[li][fiMax+1:nr] = sswS0[li][fiMax:fiMax-(nr-fiMax)+1:-1]
-                if fiMin!=0:
-                    sswS0[li][0:fiMin] = sswS0[li][fiMin:fiMin+fiMin]
-            sswS0m = convolve(sswS0, np.ones((windowSize,windowSize))/windowSize**2)
-            sswSD = np.sqrt( convolve(sswS0**2, np.ones((windowSize,windowSize))/windowSize**2)
-                             - sswS0m**2 )
-            if iSW==1:
-                noiseScalingParameters = self.import_denoisingCoefficients(polarization)[0]
-                sswSD *= np.sqrt(noiseScalingParameters[sswID])
-            result[subswathIndexMap==iSW] = (sswSD/sswS0m)[sswi==iSW]
-        return result
 
 
