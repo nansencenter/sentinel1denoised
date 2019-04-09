@@ -70,4 +70,4 @@ minimum positive value, process both HH and HV
 
 Process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
 
-`docker run --rm -it -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_thermal_denoise.py /input_dir/INPUTFILE.zip /output_dir/OUPUTFILE.tif`
+`docker run --rm -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_thermal_denoise.py /input_dir/INPUTFILE.zip /output_dir/OUPUTFILE.tif`
