@@ -58,15 +58,17 @@ def run_denoising(ifile, ofile,
     s1 = Sentinel1Image(ifile)
     n = Nansat.from_domain(s1)
     for pol in pols:
+        print('Denoise %s band' % pol)
         s1.add_denoised_band(pol)
         array = s1['sigma0_%s_denoised' % pol]
         parameters = s1.get_metadata(band_id='sigma0_%s' % pol)
         if filter_negative:
+            print('Remove negaive pixels')
             array = remove_negative(array)
         if db:
+            print('Convert to dB')
             array = 10 * np.log10(array)
             parameters['units'] = 'dB'
-        n.add_band(array=array,
-                   parameters=parameters)
+        n.add_band(array=array, parameters=parameters)
     n.set_metadata(s1.get_metadata())
     n.export(ofile, driver='GTiff')
