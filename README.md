@@ -45,7 +45,7 @@ docker run --rm -it -v /path/to/data:/path/to/data s1denoise python
 
 # Example
 
-To do processing inside Python environment:
+Do processing inside Python environment:
 ```python
 from s1denoise import Sentinel1Image
 # open access to file with S1 data
@@ -58,10 +58,16 @@ s1.add_denoised_band('HV')
 s0_hv = s1['sigma0_HV_denoised']
 ```
 
-To process a single file and export as GeoTIFF:
+Process a single file and export as GeoTIFF:
 
 `s1_thermal_denoise.py /path/to/data/S1B_EW_GRDM_1SDH_INPUTFILE.zip /path/to/data/output.tif`
 
-To process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
+Process a single file, convert to sigma0 to dB, replace negative values with the closest
+minimum positive value, process both HH and HV
 
-`docker run --rm -it -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_thermal_denoise.py /input_dir/S1B_EW_GRDM_1SDH_INPUTFILE.zip /output_dir/output.tif`
+`s1_thermal_denoise.py INPUTFILE.zip OUTPUTFILE.tif -db -nn -p HHHV`
+
+
+Process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
+
+`docker run --rm -it -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_thermal_denoise.py /input_dir/INPUTFILE.zip /output_dir/OUPUTFILE.tif`
