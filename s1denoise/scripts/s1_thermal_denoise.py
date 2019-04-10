@@ -13,7 +13,7 @@ def parse_args(args):
     parser.add_argument('ofile', type=str, help='output GeoTIFD file')
     parser.add_argument('-db', '--decibel', action='store_true', help='Export in decibels')
     parser.add_argument('-nn', '--no-negatives', action='store_true',
-                        help='Replace negative pixels with smallest positive pixel in the vicinity')
+                        help='Replace negative pixels with nearest smallest positive pixel')
     parser.add_argument('-p', '--polarisation', default='HV',
                         choices=['HH', 'HV', 'HHHV',],
                         help='Process bands in these polarizations')
@@ -25,8 +25,5 @@ if __name__ == '__main__':
     pols = {'HH': ['HH'],
             'HV': ['HV'],
             'HHHV': ['HH', 'HV']}[args.polarisation]
-    run_denoising(args.ifile, args.ofile,
-                    pols=pols,
-                    db=args.decibel,
-                    filter_negative=args.no_negatives
-                    )
+    s1 = run_denoising(args.ifile, pols=pols, db=args.decibel, filter_negative=args.no_negatives)
+    s1.export(args.ofile, driver='GTiff')
