@@ -28,19 +28,13 @@ def remove_negative(array, window=10, **kwargs):
     array[mask] = arr2[mask]
     return array
 
-def run_denoising(ifile, ofile,
-                    pols=['HV'],
-                    db=False,
-                    filter_negative=False,
-                    **kwargs):
+def run_denoising(ifile, pols=['HV'], db=False, filter_negative=False, **kwargs):
     """ Run denoising of input file
 
     Parameters
     ----------
     ifile : str
         input file
-    ofile : str
-        output file
     pols : str
         polarisoation options, ['HH'], ['HV'] or ['HH','HV']
     db : bool
@@ -50,9 +44,10 @@ def run_denoising(ifile, ofile,
     filter_negative : bool
         replace negative values with smallest nearest positive?
 
-    Modifies
+    Returns
     --------
-    Writes to the output file in GeoTIFF format
+    s1 : Nansat
+        object with denoised bands and metadata
 
     """
     s1 = Sentinel1Image(ifile)
@@ -71,4 +66,5 @@ def run_denoising(ifile, ofile,
             parameters['units'] = 'dB'
         n.add_band(array=array, parameters=parameters)
     n.set_metadata(s1.get_metadata())
-    n.export(ofile, driver='GTiff')
+
+    return n
