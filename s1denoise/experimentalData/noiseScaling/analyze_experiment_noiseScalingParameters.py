@@ -21,6 +21,7 @@ for li, npzFile in enumerate(npzFilesAll):
         continue
     else:
         npzFiles.append(npzFile)
+# stack processed files
 IPFversion = {'EW%s' % li: [] for li in range(1,6)}
 powerDifference = {'EW%s' % li: [] for li in range(1,6)}
 scalingFactor = {'EW%s' % li: [] for li in range(1,6)}

@@ -21,6 +21,7 @@ for li, npzFile in enumerate(npzFilesAll):
         continue
     else:
         npzFiles.append(npzFile)
+# stack processed files
 npz = np.load(npzFiles[0])
 snnrEdges = npz['snnrEdges']
 nnsdEdges = npz['nnsdEdges']
@@ -45,7 +46,7 @@ np.savez_compressed(platform+'_extraScaling.npz', windowSizes=windowSizes,
                     snnrEdges=snnrEdges, nnsdEdges=nnsdEdges, nnsdHist=nnsdHist,
                     dBsnnrEdges=dBsnnrEdges, esfEdges=esfEdges, esfHist=esfHist)
 
-
+# compute fit values
 npz = np.load(platform+'_extraScaling.npz')
 snnrEdges = npz['snnrEdges']
 nnsdEdges = npz['nnsdEdges']
@@ -82,7 +83,7 @@ np.savez_compressed(platform+'_nnsd_results.npz',
          modelFunctionString=modelFunctionString, modelCoeffs=modelCoeffs,
          windowSizes=windowSizes, fitValue=fitValue, fitRMSE=fitRMSE)
 
-
+# compute fit values
 npz = np.load(platform+'_extraScaling.npz')
 dBsnnrEdges = npz['dBsnnrEdges']
 esfEdges = npz['esfEdges']
