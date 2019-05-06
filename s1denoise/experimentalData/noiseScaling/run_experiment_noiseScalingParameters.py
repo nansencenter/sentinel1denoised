@@ -19,3 +19,4 @@ zipFilesUnprocessed = [z for z in zipFilesAll
     if not os.path.exists(outputPath + z.split('/')[-1].split('.')[0] + '_noiseScaling.npz')]
 pool = Pool(2)
 pool.map(run_process, zipFilesUnprocessed)
+pool.close(); pool.terminate(); pool.join();

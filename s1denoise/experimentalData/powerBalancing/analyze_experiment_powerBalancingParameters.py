@@ -21,6 +21,7 @@ for li, npzFile in enumerate(npzFilesAll):
         continue
     else:
         npzFiles.append(npzFile)
+# stack processed files
 IPFversion = []
 powerDifference = []
 balancingPower = []
