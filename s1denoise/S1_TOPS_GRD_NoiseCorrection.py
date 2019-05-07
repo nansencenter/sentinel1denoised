@@ -838,9 +838,9 @@ class Sentinel1Image(Nansat):
                     # reference, R2.
                     referencePattern = ((1. / elevationAntennaPatternIntp(y, xBins[cPx:-cPx])
                         / rangeSpreadingLossIntp(y, xBins[cPx:-cPx]))**2).flatten()
+                    zInterpolator = InterpolatedUnivariateSpline(x[valid], z[valid])
                     # Finding pixel shift, OPTION 1: Cross-correlation
                     xShiftPixel, deltaShift, ni = 0, np.inf, 0
-                    zInterpolator = InterpolatedUnivariateSpline(x[valid], z[valid])
                     while deltaShift > 1e-2 and ni < 10:
                         ni += 1
                         noiseVector = zInterpolator(xBins + xShiftPixel)
