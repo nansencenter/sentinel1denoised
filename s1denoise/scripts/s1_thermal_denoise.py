@@ -10,7 +10,7 @@ def parse_args(args):
     parser = argparse.ArgumentParser(
             description="Remove thermal noise from Sentinel-1 TOPSAR EW GRDM")
     parser.add_argument('ifile', type=str, help='input Sentinel-1 file in SAFE format')
-    parser.add_argument('ofile', type=str, help='output GeoTIFD file')
+    parser.add_argument('ofile', type=str, help='output GeoTIFF file')
     parser.add_argument('-db', '--decibel', action='store_true', help='Export in decibels')
     parser.add_argument('-nn', '--no-negatives', action='store_true',
                         help='Replace negative pixels with nearest smallest positive pixel')
