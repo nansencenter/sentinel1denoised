@@ -311,7 +311,8 @@ class Sentinel1Image(Nansat):
         ''' Import denoising coefficients '''
         satID = self.filename.split('/')[-1][:3]
         denoParams = np.load(os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             'denoising_parameters_%s.npz' % satID))[polarization].item()
+                             'denoising_parameters_%s.npz' % satID),
+                             allow_pickle=True)[polarization].item()
         noiseScalingParameters = {}
         powerBalancingParameters = {}
         extraScalingParameters = {}
