@@ -26,7 +26,7 @@ conda create -y -n py3s1denoise gdal numpy pillow netcdf4 scipy
 source activate py3s1denoise
 
 # install nansat
-pip instal nansat
+pip install nansat
 
 # install s1denoise package
 python setup.py install
