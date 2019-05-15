@@ -22,7 +22,7 @@ setup(
     author_email='jeong-won.park@nersc.no, anton.korosov@nersc.no',
     packages=find_packages(),
     scripts=['s1denoise/scripts/s1_thermal_denoise.py'],
-    package_data={'s1denoise' :['s1denoise/*.npz']},
+    package_data={'s1denoise' :['*.npz']},
     install_requires=[
         'nansat',
         'scipy',
