@@ -20,13 +20,13 @@ is to use [Anaconda](https://docs.conda.io/en/latest/miniconda.html).
 git clone https://github.com/nansencenter/sentinel1denoised.git
 
 # create conda environment with key requirements
-conda create -y -n py3s1denoise gdal numpy pillow netcdf4 scipy requests
+conda create -y -n py3s1denoise gdal=2.4.1 numpy pillow netcdf4 scipy requests
 
 # activate environment
 source activate py3s1denoise
 
 # install nansat
-pip install nansat
+pip install https://github.com/nansencenter/nansat/archive/master.zip
 
 # install s1denoise package
 python setup.py install
