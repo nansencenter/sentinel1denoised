@@ -29,6 +29,7 @@ conda activate py3s1denoise
 pip install https://github.com/nansencenter/nansat/archive/master.zip
 
 # install s1denoise package
+cd sentinel1denoised
 python setup.py install
 ```
 
