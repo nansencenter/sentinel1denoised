@@ -93,7 +93,15 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
         sf = np.hstack(scalingFactor['EW%s' % iSW])[valid]
         cc = np.hstack(correlationCoefficient['EW%s' % iSW])[valid]
         fr = np.hstack(fitResidual['EW%s' % iSW])[valid]
+        # weight for fitting: higher weights for high correlation and low RMSE from K-fitting
         w = cc / fr
+        # VERY COMPLEX: fitting of K to powerDifference with degree=0
+        # Here we find optimal value of K (just one value since degree of fitted polynom is 0).
+        # That optimal value corresponds to:
+        #  * high density of powerDifference values: This high density appears where powerDifference
+        #    is low. I.e. where signal is low (low wind conditions).
+        #  * high weights: where correlation is high and rmse is low
+        # y using this fitting we avoid neccesity to choose scenes with low wind manualy.
         fitResults = np.polyfit(pd, sf, deg=0, w=w)
         noiseScalingParameters['EW%s' % iSW]['%.1f' % IPFv] = fitResults[0]
         noiseScalingParametersRMSE['EW%s' % iSW]['%.1f' % IPFv] = np.sqrt(np.sum((fitResults[0]-sf)**2 * w) / np.sum(w))
