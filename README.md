@@ -7,6 +7,9 @@ If you use Sentinel1Denoised in any academic work then you *must* cite the follo
 
 Park, Jeong-Won; Korosov, Anton; Babiker, Mohamed; Sandven, Stein; and Won, Joong-Sun (2018): Efficient noise removal of Sentinel-1 TOPSAR cross-polarization channel, IEEE Transactions on Geoscience and Remote Sensing, doi:10.1109/TGRS.2017.2765248
 
+Park, Jeong-Won; Won, Joong-Sun; Korosov, Anton A.; Babiker, Mohamed; and Miranda, Nuno (2019), Textural Noise Correction for Sentinel-1 TOPSAR Cross-Polarization Channel Images, IEEE Transactions on Geoscience and Remote Sensing, doi:10.1109/TGRS.2018.2889381
+
+
 See the CITATION file for more information.
 
 # Installation

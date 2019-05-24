@@ -1,22 +1,38 @@
-If you use Sentinel1Denoised in any academic work then you *must* cite the following paper:
+If you use Sentinel1Denoised in any academic work then you *must* cite the following papers:
 
 Park, Jeong-Won; Korosov, Anton; Babiker, Mohamed; Sandven, Stein; and Won, Joong-Sun (2018): Efficient noise removal of Sentinel-1 TOPSAR cross-polarization channel, IEEE Transactions on Geoscience and Remote Sensing, doi:10.1109/TGRS.2017.2765248
 
-The PDF of this paper is available at https://doi.org/10.1109/TGRS.2017.2765248
+https://doi.org/10.1109/TGRS.2017.2765248
 
 
 In BibTeX format:
 
-@ARTICLE{8126233, 
-	author={J. W. Park and A. A. Korosov and M. Babiker and S. Sandven and J. S. Won}, 
-	journal={IEEE Transactions on Geoscience and Remote Sensing}, 
-	title={Efficient Thermal Noise Removal for Sentinel-1 TOPSAR Cross-Polarization Channel}, 
-	year={2018}, 
-	volume={56}, 
-	number={3}, 
-	pages={1555-1565}, 
-	keywords={backscatter;calibration;geophysical image processing;image denoising;radar imaging;remote sensing by radar;synthetic aperture radar;thermal noise;European Space Agency;Progressive Scans synthetic aperture radar image;Sentinel-1 TOPSAR cross-polarization channel;Sentinel-1 Terrain Observation;additive thermal noise;azimuth descalloping;calibrated noise vectors;efficient thermal noise removal;interswath power balancing;local residual noise power compensation;noise power subtraction;noise reduction;noise scaling;noise-uncorrelated gentle backscatter profile;optimal correction coefficients;reconstructed noise field;relatively narrow backscattering distribution;residual noise contributions;three-step correction process;Additives;Antennas;Azimuth;Backscatter;Noise reduction;Synthetic aperture radar;Thermal noise;Cross polarization;Sentinel-1;Terrain Observation with Progressive Scans synthetic aperture radar (TOPSAR);denoising;scalloping;thermal noise}, 
-	doi={10.1109/TGRS.2017.2765248}, 
-	ISSN={0196-2892}, 
+@ARTICLE{8126233,
+	author={J. W. Park and A. A. Korosov and M. Babiker and S. Sandven and J. S. Won},
+	journal={IEEE Transactions on Geoscience and Remote Sensing},
+	title={Efficient Thermal Noise Removal for Sentinel-1 TOPSAR Cross-Polarization Channel},
+	year={2018},
+	volume={56},
+	number={3},
+	pages={1555-1565},
+	keywords={backscatter;calibration;geophysical image processing;image denoising;radar imaging;remote sensing by radar;synthetic aperture radar;thermal noise;European Space Agency;Progressive Scans synthetic aperture radar image;Sentinel-1 TOPSAR cross-polarization channel;Sentinel-1 Terrain Observation;additive thermal noise;azimuth descalloping;calibrated noise vectors;efficient thermal noise removal;interswath power balancing;local residual noise power compensation;noise power subtraction;noise reduction;noise scaling;noise-uncorrelated gentle backscatter profile;optimal correction coefficients;reconstructed noise field;relatively narrow backscattering distribution;residual noise contributions;three-step correction process;Additives;Antennas;Azimuth;Backscatter;Noise reduction;Synthetic aperture radar;Thermal noise;Cross polarization;Sentinel-1;Terrain Observation with Progressive Scans synthetic aperture radar (TOPSAR);denoising;scalloping;thermal noise},
+	doi={10.1109/TGRS.2017.2765248},
+	ISSN={0196-2892},
 	month={March}
 }
+
+Park, Jeong-Won; Won, Joong-Sun; Korosov, Anton A.; Babiker, Mohamed; and Miranda, Nuno (2019), Textural Noise Correction for Sentinel-1 TOPSAR Cross-Polarization Channel Images, IEEE Transactions on Geoscience and Remote Sensing, doi:10.1109/TGRS.2018.2889381
+https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8630667
+
+@ARTICLE{8630667,
+author={J. {Park} and J. {Won} and A. A. {Korosov} and M. {Babiker} and N. {Miranda}},
+journal={IEEE Transactions on Geoscience and Remote Sensing},
+title={Textural Noise Correction for Sentinel-1 TOPSAR Cross-Polarization Channel Images},
+year={2019},
+volume={},
+number={},
+pages={1-10},
+keywords={Thermal noise;Synthetic aperture radar;Signal to noise ratio;Additives;Noise reduction;Image reconstruction;Distortion;Cross polarization;image texture;Sentinel-1;synthetic aperture radar (SAR);terrain observation with progressive scans SAR (TOPSAR);thermal noise.},
+doi={10.1109/TGRS.2018.2889381},
+ISSN={0196-2892},
+month={},}
