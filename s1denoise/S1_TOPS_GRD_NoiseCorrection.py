@@ -737,19 +737,36 @@ class Sentinel1Image(Nansat):
         interpolator = RectBivariateSpline(uniqueLine, uniquePixel, elevationAngle)
         return interpolator
 
-    def rollAngleInterpolator(self, polarization):
+    def rollAngleInterpolator(self, polarization, source='annotated'):
         ''' Generate roll angle interpolator '''
         antennaPattern = self.import_antennaPattern(polarization)
         relativeAzimuthTime = []
-        rollAngle = []
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             subswathID = '%s%s' % (self.obsMode, iSW)
             relativeAzimuthTime.append([ (t-self.time_coverage_center).total_seconds()
                                          for t in antennaPattern[subswathID]['azimuthTime'] ])
-            rollAngle.append(antennaPattern[subswathID]['roll'])
         relativeAzimuthTime = np.hstack(relativeAzimuthTime)
-        rollAngle = np.hstack(rollAngle)
         sortIndex = np.argsort(relativeAzimuthTime)
+        if source=='annotated':
+            rollAngle = []
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                rollAngle.append(antennaPattern[subswathID]['roll'])
+            relativeAzimuthTime = np.hstack(relativeAzimuthTime)
+            rollAngle = np.hstack(rollAngle)
+        elif source=='nominal':
+            positionXYZ = self.orbitAtGivenTime(polarization, relativeAzimuthTime)['positionXYZ']
+            satelliteLatitude = np.arctan2(positionXYZ[:,2],
+                                           np.sqrt(positionXYZ[:,0]**2 + positionXYZ[:,1]**2))
+            r_major = 6378137.0            # WGS84 semi-major axis
+            r_minor = 6356752.314245179    # WGS84 semi-minor axis
+            earthRadius = np.sqrt(  (  (r_major**2 * np.cos(satelliteLatitude))**2
+                                     + (r_minor**2 * np.sin(satelliteLatitude))**2)
+                                  / (  (r_major * np.cos(satelliteLatitude))**2
+                                     + (r_minor * np.sin(satelliteLatitude))**2) )
+            satelliteAltitude = np.linalg.norm(positionXYZ, axis=1) - earthRadius
+            # see Eq.9-19 in the reference R2.
+            rollAngle = 29.45 - 0.0566*(satelliteAltitude/1000. - 711.7)
         rollAngleIntp = InterpolatedUnivariateSpline(
             relativeAzimuthTime[sortIndex], rollAngle[sortIndex])
         azimuthTimeIntp = self.geolocationGridPointInterpolator(polarization, 'azimuthTime')
@@ -1152,7 +1169,7 @@ class Sentinel1Image(Nansat):
             sigma0[sigma0 < 0] = 0
         elif algorithm=='NERSC':
             sigma0[rawSigma0==0] = np.nan
-            sigma0[rawSigma0 < 1e-4] = np.nan
+            sigma0[rawSigma0 < 1e-5] = np.nan
         if returnNESZ:
             # return both noise power and noise-power-subtracted sigma nought
             return noiseEquivalentSigma0, sigma0
