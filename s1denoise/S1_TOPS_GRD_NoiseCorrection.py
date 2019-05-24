@@ -16,8 +16,9 @@ import numpy as np
 from datetime import datetime, timedelta
 from xml.dom.minidom import parse, parseString
 from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
-from scipy.ndimage import convolve
+from scipy.ndimage import convolve, uniform_filter
 from scipy.optimize import fminbound
+
 from nansat import Nansat
 
 warnings.simplefilter("ignore")
@@ -36,13 +37,11 @@ ANTENNA_STEERING_RATE = { 'IW1': 1.590368784,
                           'EW4': 2.512694636,
                           'EW5': 2.122855427 }    # degrees per second. Available from AUX_INS
 
-
 def get_DOM_subElement(element, tags):
     ''' Get sub-element from XML DOM element based on tags '''
     for tag in tags:
         element = element.getElementsByTagName(tag)[0]
     return element
-
 
 def get_DOM_nodeValue(element, tags, oType='str'):
     ''' Get value of XML DOM sub-element based on tags '''
@@ -58,7 +57,6 @@ def get_DOM_nodeValue(element, tags, oType='str'):
     if len(value)==1:
         value = value[0]
     return value
-
 
 def cubic_hermite_interpolation(x,y,xi):
     ''' Get interpolated value for given time '''
@@ -79,7 +77,6 @@ def range_to_target(satPosVec, lookVec, terrainHeight=0):
           / (1 + epsilon * lookVec[2]**2) )
     return -F - np.sqrt(F**2 - G)
 
-
 def planar_rotation(rotAxis, inputVec, rotAngle):
     ''' Planar rotation about a given axis '''
     rotAxis = rotAxis / np.linalg.norm(rotAxis)
@@ -99,7 +96,6 @@ def planar_rotation(rotAxis, inputVec, rotAngle):
                            d31 * inputVec[0] + d32 * inputVec[1] + d33 * inputVec[2]  ])
     return outputVec
 
-
 def est_shift(reference, test, oversampling=10):
     ''' Estimate relative shift '''
     # test signal must be longer than reference signal
@@ -112,6 +108,36 @@ def est_shift(reference, test, oversampling=10):
     cci = InterpolatedUnivariateSpline(x, cc)(xi)
     return xi[np.argmax(cci)] - len(cc)//2
 
+def fillGaps(dataArray, filterSize=3):
+    ''' Fill gaps using mirrored vector in each dimension '''
+    if filterSize%2==0:
+        filterSize += 1
+    fs = filterSize//2
+    nRows, nCols = dataArray.shape
+    for li in range(nRows):
+        fi = np.where(np.isfinite(dataArray[li,:]))[0]
+        if len(fi)<2:
+            continue
+        fiMin, fiMax = fi.min(), fi.max()
+        if fiMax!=(nCols-1):
+            dataArray[li,:][fiMax+1:min(nCols,fiMax*2)] = dataArray[li,:][fiMax-1:max(0,fiMax-(nCols-fiMax)):-1]
+        if fiMin!=0:
+            dataArray[li,:][0:min(fiMin,nCols-fiMin-1)] = dataArray[li,:][min(nCols-1,2*fiMin):fiMin:-1]
+    for li in range(nCols):
+        fi = np.where(np.isfinite(dataArray[:,li]))[0]
+        if len(fi)<2:
+            continue
+        fiMin, fiMax = fi.min(), fi.max()
+        if fiMax!=(nRows-1):
+            dataArray[:,li][fiMax+1:min(nRows,fiMax*2)] = dataArray[:,li][fiMax-1:max(0,fiMax-(nRows-fiMax)):-1]
+        if fiMin!=0:
+            dataArray[:,li][0:min(fiMin,nRows-fiMin-1)] = dataArray[:,li][min(nRows-1,2*fiMin):fiMin:-1]
+    ri,ci = np.where(np.isnan(dataArray))
+    while len(ri)!=0:
+        for r,c in zip(ri,ci):
+            dataArray[r,c] = np.nanmean(dataArray[max(0,r-fs):min(nRows,r+fs+1),max(0,c-fs):min(nCols,c+fs+1)])
+        ri,ci = np.where(np.isnan(dataArray))
+    return dataArray
 
 
 class Sentinel1Image(Nansat):
@@ -189,14 +215,12 @@ class Sentinel1Image(Nansat):
         self.download_aux_calibration(auxCalibFilename, self.platform.lower())
         self.auxiliaryCalibrationXML = parse(self.auxiliaryCalibration_file)
 
-
     def set_aux_data_dir(self):
         """ Set directory where aux calibration data is stored """
         self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.environ.get('HOME')),
                                          '.s1denoise')
         if not os.path.exists(self.aux_data_dir):
             os.makedirs(self.aux_data_dir)
-
 
     def download_aux_calibration(self, filename, platform):
         """ Download auxiliary calibration files form ESA in self.aux_data_dir """
@@ -211,7 +235,6 @@ class Sentinel1Image(Nansat):
                 f.write(r.content)
             subprocess.call(['tar', '-xzvf', cal_file_tgz, '-C', self.aux_data_dir])
         self.auxiliaryCalibration_file = cal_file
-
 
     def import_antennaPattern(self, polarization):
         ''' Import antenna pattern from annotation XML DOM '''
@@ -236,7 +259,6 @@ class Sentinel1Image(Nansat):
                     antennaPattern[swath][k].append(
                         get_DOM_nodeValue(iList,[k],'float'))
         return antennaPattern
-
 
     def import_azimuthAntennaElementPattern(self, polarization):
         ''' Import azimuth antenna element pattern from auxiliary calibration XML DOM '''
@@ -264,7 +286,6 @@ class Sentinel1Image(Nansat):
                             get_DOM_nodeValue(iList,[k],'float') )
         return azimuthAntennaElementPattern
 
-
     def import_azimuthFmRate(self, polarization):
         ''' Import azimuth frequency modulation rate from annotation XML DOM '''
         azimuthFmRateList = self.annotationXML[polarization].getElementsByTagName('azimuthFmRate')
@@ -280,7 +301,6 @@ class Sentinel1Image(Nansat):
                     azimuthFmRate[k].append(
                         get_DOM_nodeValue(iList,[k],'float'))
         return azimuthFmRate
-
 
     def import_calibrationVector(self, polarization):
         ''' Import calibration vectors from calibration annotation XML DOM '''
@@ -305,7 +325,6 @@ class Sentinel1Image(Nansat):
                     calibrationVector[k].append(
                         get_DOM_nodeValue(iList,[k],'float'))
         return calibrationVector
-
 
     def import_denoisingCoefficients(self, polarization):
         ''' Import denoising coefficients '''
@@ -378,7 +397,6 @@ class Sentinel1Image(Nansat):
         return ( noiseScalingParameters, powerBalancingParameters, extraScalingParameters,
                  noiseVarianceParameters )
 
-
     def import_elevationAntennaPattern(self, polarization):
         ''' Import elevation antenna pattern from auxiliary calibration XML DOM '''
         calParamsList = self.auxiliaryCalibrationXML.getElementsByTagName('calibrationParams')
@@ -405,7 +423,6 @@ class Sentinel1Image(Nansat):
                             get_DOM_nodeValue(iList,[k],'float') )
         return elevationAntennaPattern
 
-
     def import_geolocationGridPoint(self, polarization):
         ''' Import geolocation grid point from annotation XML DOM '''
         geolocationGridPointList = self.annotationXML[polarization].getElementsByTagName(
@@ -431,7 +448,6 @@ class Sentinel1Image(Nansat):
                     geolocationGridPoint[k].append(
                         get_DOM_nodeValue(iList,[k],'float'))
         return geolocationGridPoint
-
 
     def import_noiseVector(self, polarization):
         ''' Import noise vectors from noise annotation XML DOM '''
@@ -496,7 +512,6 @@ class Sentinel1Image(Nansat):
                             get_DOM_nodeValue(iList,[k],'int'))
         return noiseRangeVector, noiseAzimuthVector
 
-
     def import_orbit(self, polarization):
         ''' Import orbit information from annotation XML DOM '''
         orbitList = self.annotationXML[polarization].getElementsByTagName('orbit')
@@ -514,7 +529,6 @@ class Sentinel1Image(Nansat):
                     get_DOM_nodeValue(iList,['velocity',k],'float'))
         return orbit
 
-
     def import_processorScalingFactor(self, polarization):
         ''' Import swath processing scaling factors from annotation XML DOM '''
         swathProcParamsList = self.annotationXML[polarization].getElementsByTagName(
@@ -525,7 +539,6 @@ class Sentinel1Image(Nansat):
             processorScalingFactor[swath] = get_DOM_nodeValue(
                 iList,['processorScalingFactor'],'float')
         return processorScalingFactor
-
 
     def import_swathBounds(self, polarization):
         ''' Import swath bounds information from annotation XML DOM '''
@@ -549,7 +562,6 @@ class Sentinel1Image(Nansat):
                         swathBounds[swath][k].append(get_DOM_nodeValue(iList2,[k],'int'))
         return swathBounds
 
-
     def azimuthFmRateAtGivenTime(self, polarization, relativeAzimuthTime, slantRangeTime):
         ''' Get azimuth frequency modulation rate for given time vectors
 
@@ -571,7 +583,6 @@ class Sentinel1Image(Nansat):
                    + azimuthFmRatePolynomial[:,2] * (tt[1]-t0)**2 )
             azimuthFmRateAtGivenTime.append(np.interp(tt[0], xp, fp))
         return np.squeeze(azimuthFmRateAtGivenTime)
-
 
     def focusedBurstLengthInTime(self, polarization):
         ''' Get focused burst length in zero-Doppler time domain
@@ -602,7 +613,6 @@ class Sentinel1Image(Nansat):
                 raise ValueError('number of bursts cannot be determined.')
         return focusedBurstLengthInTime
 
-
     def geolocationGridPointInterpolator(self, polarization, itemName):
         ''' Generate interpolator for items in geolocation grid point list '''
         geolocationGridPoint = self.import_geolocationGridPoint(polarization)
@@ -618,7 +628,6 @@ class Sentinel1Image(Nansat):
             z = np.reshape(geolocationGridPoint[itemName],(len(y),len(x)))
         interpolator = RectBivariateSpline(y, x, z)
         return interpolator
-
 
     def orbitAtGivenTime(self, polarization, relativeAzimuthTime):
         ''' Interpolate orbit parameters for given time vector '''
@@ -639,7 +648,6 @@ class Sentinel1Image(Nansat):
             orbitAtGivenTime[k] = np.squeeze(orbitAtGivenTime[k])
         return orbitAtGivenTime
 
-
     def subswathCenterSampleIndex(self, polarization):
         ''' Range center pixel indices along azimuth for each subswath '''
         swathBounds = self.import_swathBounds(polarization)
@@ -653,7 +661,6 @@ class Sentinel1Image(Nansat):
             subswathCenterSampleIndex[subswathID] = int(round(
                 np.sum(midPixelIndices * numberOfLines) / np.sum(numberOfLines) ))
         return subswathCenterSampleIndex
-
 
     def calibrationVectorMap(self, polarization):
         ''' Convert calibration vectors into full grid pixels '''
@@ -686,7 +693,6 @@ class Sentinel1Image(Nansat):
             calibrationVectorMap[valid] = interpFunc(np.arange(self.shape()[1]),
                                                      np.arange(self.shape()[0])).T[valid]
         return calibrationVectorMap
-
 
     def refinedElevationAngleInterpolator(self, polarization):
         ''' Generate elevation angle interpolator using the refined elevation angle
@@ -731,7 +737,6 @@ class Sentinel1Image(Nansat):
         interpolator = RectBivariateSpline(uniqueLine, uniquePixel, elevationAngle)
         return interpolator
 
-
     def rollAngleInterpolator(self, polarization):
         ''' Generate roll angle interpolator '''
         antennaPattern = self.import_antennaPattern(polarization)
@@ -756,7 +761,6 @@ class Sentinel1Image(Nansat):
         interpolator = RectBivariateSpline(
             uniqueLine, uniquePixel, rollAngleIntp(azimuthTimeIntp(uniqueLine, uniquePixel)))
         return interpolator
-
 
     def elevationAntennaPatternInterpolator(self, polarization):
         ''' Generate elevation antenna pattern interpolator
@@ -790,7 +794,6 @@ class Sentinel1Image(Nansat):
             np.arange(self.shape()[0]), np.arange(self.shape()[1]), elevationAntennaPatternMap)
         return interpolator
 
-
     def rangeSpreadingLossInterpolator(self, polarization):
         ''' Generate range spreading loss interpolator
 
@@ -805,7 +808,6 @@ class Sentinel1Image(Nansat):
         interpolator = RectBivariateSpline(
             np.arange(self.shape()[0]), np.arange(self.shape()[1]), rangeSpreadingLoss)
         return interpolator
-
 
     def noiseVectorMap(self, polarization, lutShift=False):
         ''' Convert noise vectors into full grid pixels '''
@@ -933,7 +935,6 @@ class Sentinel1Image(Nansat):
                         y, z, k=1)(yBins)[:,np.newaxis] * np.ones(xe-xs+1) )
         return noiseVectorMap
 
-
     def subswathIndexMap(self, polarization):
         ''' Convert subswath indices into full grid pixels '''
         subswathIndexMap = np.zeros(self.shape(), dtype=np.uint8)
@@ -948,14 +949,12 @@ class Sentinel1Image(Nansat):
                 subswathIndexMap[fal:lal+1,frs:lrs+1] = iSW
         return subswathIndexMap
 
-
     def rawSigma0Map(self, polarization):
         ''' Get sigma nought without noise power subtraction '''
         DN2 = np.power(self['DN_' + polarization].astype(np.uint32), 2)
         sigma0 = DN2 / np.power(self.calibrationVectorMap(polarization), 2)
         #sigma0[DN2==0] = np.nan
         return sigma0
-
 
     def rawNoiseEquivalentSigma0Map(self, polarization, lutShift=False):
         ''' Get annotated noise equivalent sigma nought '''
@@ -974,14 +973,12 @@ class Sentinel1Image(Nansat):
                     * noiseCalibrationFactor['%s%s' % (self.obsMode, iSW)] )
         return noiseEquivalentSigma0
 
-
     def incidenceAngleMap(self, polarization):
         ''' Get incidence angle '''
         interpolator = self.geolocationGridPointInterpolator(polarization, 'incidenceAngle')
         incidenceAngle = np.squeeze(interpolator(
             np.arange(self.shape()[0]), np.arange(self.shape()[1])))
         return incidenceAngle
-
 
     def scallopingGainMap(self, polarization):
         ''' Compute scalloping gains for full grid pixels
@@ -1062,7 +1059,6 @@ class Sentinel1Image(Nansat):
                 scallopingGain[:,np.newaxis] * np.ones((1,self.shape()[1])))[valid]
         return scallopingGainMap
 
-
     def adaptiveNoiseScaling(self, sigma0, noiseEquivalentSigma0, subswathIndexMap,
                              extraScalingParameters, windowSize):
         ''' adaptive noise scaling compensating for local residual noise power
@@ -1083,7 +1079,6 @@ class Sentinel1Image(Nansat):
             yInterp = interpFunc(SNR[valid])
             noiseEquivalentSigma0[valid] = noiseEquivalentSigma0[valid] * yInterp
         return noiseEquivalentSigma0
-
 
     def modifiedNoiseEquivalentSigma0Map(self, polarization, localNoisePowerCompensation=False):
         ''' Get noise power-scaled and interswath power-balanced noise equivalent sigma nought '''
@@ -1165,7 +1160,6 @@ class Sentinel1Image(Nansat):
             # return noise power subtracted sigma nought
             return sigma0
 
-
     def add_denoised_band(self, polarization):
         ''' Add denoised sigma nought to Nansat object as a band '''
         # all of these bands are not needed except for sigma0_denoised #
@@ -1189,7 +1183,6 @@ class Sentinel1Image(Nansat):
             self.add_band(
                 self.thermalNoiseRemoval(polarization),
                 parameters={'name':'sigma0_%s' % polarization + '_denoised'})
-
 
     def experiment_noiseScaling(self, polarization, numberOfLinesToAverage=1000):
         ''' Generate experimental data for noise scaling parameter optimization
@@ -1343,7 +1336,6 @@ class Sentinel1Image(Nansat):
                 results['%s%s' % (self.obsMode, iSW)]['balancingPower'].append(balancingPower[iSW-1])
         np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
 
-
     def experiment_extraScaling(self, polarization):
         ''' Generate experimental data for extra scaling parameter optimization '''
         # see section III.E of the reference, R1.
@@ -1413,7 +1405,6 @@ class Sentinel1Image(Nansat):
                     bins=nBins, range=[dBsnnrRange, esfRange])[0]
         np.savez_compressed(self.name.split('.')[0] + '_extraScaling.npz', **results)
 
-
     def landmask(self, skipGCP=4):
         ''' Generate landmask by reversing MODIS watermask data '''
         if skipGCP not in [1,2,4,5]:
@@ -1430,4 +1421,96 @@ class Sentinel1Image(Nansat):
         dummy = self.vrt.dataset.SetGCPs(originalGCPs, projectionInfo)
         return landmask
 
+    def texturalNoiseRemoval(self, polarization, preserveTotalPower=True, windowSize=15):
+        """ Thermal noise removal followed by textural noise compensation
 
+        In case of HH only jump between ew1 and ew2 is automatically compensated in the ew1.
+        For HV coefficients for scaling standard deviation are loaded from pregenerated NPZ.
+
+        Parameters
+        ----------
+        polarisation : str
+            'HH' or 'HV'
+        preserveTotalPower : bool
+            Add mean total power to the denoised signal?
+        windowSize : int
+            Size of window where SD compenstaion is preformed
+
+        Returns
+        -------
+        sigma0 : 2d numpy.ndarray
+            Full size array with thermal and texture noise removed
+
+        """
+        if polarization=='HH':
+            # for HH, apply simple adjustment of SDs between EW1 and EW2 for now...
+            windowSize = windowSize*2       # use larger window size for HH
+            sigma0 = self.rawSigma0Map(polarization)
+            sigma0[sigma0==0] = np.nan
+            offsetPower = 0
+            nanMask = np.isnan(sigma0)
+            subswathIndexMap = self.subswathIndexMap(polarization)
+            # get data segments along subswath boundaries between EW1 and EW2
+            swb = self.import_swathBounds(polarization)['%s1' % self.obsMode]
+            sw1 = np.vstack([sigma0[fa:la+1,lr-windowSize+1:lr+1] for lr,fa,la in
+                      zip(swb['lastRangeSample'],swb['firstAzimuthLine'],swb['lastAzimuthLine'])])
+            sw2 = np.vstack([sigma0[fa:la+1,lr+1:lr+windowSize+1] for lr,fa,la in
+                      zip(swb['lastRangeSample'],swb['firstAzimuthLine'],swb['lastAzimuthLine'])])
+            # compute scaling factor from the ratios of EW1 and EW2 for mean and standard deviation
+            meanRatio = [ np.nanmean(sw2[ri:ri+windowSize,:])/np.nanmean(sw1[ri:ri+windowSize,:])
+                          for ri in range(len(sw1)-windowSize) ]
+            stdRatio = [ np.nanstd(sw2[ri:ri+windowSize,:])/np.nanstd(sw1[ri:ri+windowSize,:])
+                         for ri in range(len(sw1)-windowSize) ]
+            scalingFactor = np.nanmedian(np.array(stdRatio) / np.array(meanRatio))
+            #print('Computed extra SD scaling factor for %s1 = %f' % (self.obsMode, scalingFactor))
+            if scalingFactor < 1.0 or scalingFactor > 1.3:
+                scalingFactor = 1.15
+            # apply scaling to EW1
+            ri = np.where(subswathIndexMap==1)[1]
+            riMin, riMax = ri.min(), ri.max()
+            sswS0 = np.copy(sigma0[:,riMin:riMax+1])
+            sswi = np.copy(subswathIndexMap[:,riMin:riMax+1])
+            sswS0[sswi!=1] = np.nan
+            sswS0 = fillGaps(sswS0)
+            sswS0m = uniform_filter(sswS0, windowSize)
+            sswS0 = (sswS0 - sswS0m) * scalingFactor + sswS0m
+            sigma0[subswathIndexMap==1] = sswS0[sswi==1]
+            sigma0[nanMask] = np.nan
+        elif polarization=='HV':
+            # thermal noise removal
+            noiseEquivalentSigma0, sigma0 = self.thermalNoiseRemoval(
+                polarization, algorithm='NERSC', localNoisePowerCompensation=False,
+                preserveTotalPower=False, returnNESZ=True )
+            offsetPower = np.nanmean(noiseEquivalentSigma0)
+            subswathIndexMap = self.subswathIndexMap(polarization)
+            noiseVarianceParameters = self.import_denoisingCoefficients(polarization)[3]
+            nanMask = np.isnan(sigma0)
+            # subswath-wise processing
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                # rectangularize subswath data
+                ai, ri = np.where(subswathIndexMap==iSW)
+                aiMin, aiMax, riMin, riMax = ai.min(), ai.max(), ri.min(), ri.max()
+                sswS0 = np.copy(sigma0[:,riMin:riMax+1])
+                sswN0 = np.copy(noiseEquivalentSigma0[:,riMin:riMax+1])
+                sswi = np.copy(subswathIndexMap[:,riMin:riMax+1])
+                sswS0[sswi!=iSW] = np.nan
+                sswN0[sswi!=iSW] = np.nan
+                sswS0 = fillGaps(sswS0)
+                sswN0 = fillGaps(sswN0)
+                # compute local signal plus noise to noise ratio (SNNR)
+                sswS0m = uniform_filter(sswS0, windowSize)
+                sswN0m = uniform_filter(sswN0, windowSize)
+                SNNR = (sswS0m + sswN0m) / sswN0m
+                SNNR[SNNR<1] = 1
+                SD = np.sqrt( uniform_filter(sswS0**2, windowSize) - sswS0m**2 )
+                # simulate noise equivalent standard deviation (NESD)
+                simSD = noiseVarianceParameters['%s%s' % (self.obsMode, iSW)] * sswN0m * (1./SNNR)
+                # NESD compensation. See Eq.9 of the reference paper.
+                sswS0 = (sswS0 - sswS0m) * (1. - simSD / SD) + sswS0m
+                sigma0[subswathIndexMap==iSW] = sswS0[sswi==iSW]
+            sigma0[nanMask] = np.nan
+        if preserveTotalPower:
+            sigma0 += offsetPower
+        # mask out pixels where the raw DNs are not valid
+        sigma0[self.rawSigma0Map(polarization)==0] = np.nan
+        return sigma0
