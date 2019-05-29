@@ -9,6 +9,8 @@
 # https://sentinel.esa.int/documents/247904/1877131/Sentinel-1-Level-1-Detailed-Algorithm-Definition
 # R3: Digital Processing of Synthetic Aperture Radar Data: Algorithms and Implementation
 #     Cumming and Wong, 2005, Artech House
+# R4: Textural Noise Correction for Sentinel-1 TOPSAR Cross-Polarization Channel Images
+#     Park et al., 2019, IEEE TGRS 57(6):4040-4049. doi:10.1109/TGRS.2018.2889381
 
 
 import os, sys, glob, warnings, zipfile, requests, subprocess
@@ -1494,6 +1496,7 @@ class Sentinel1Image(Nansat):
             sigma0[subswathIndexMap==1] = sswS0[sswi==1]
             sigma0[nanMask] = np.nan
         elif polarization=='HV':
+            # see the reference paper R4
             # thermal noise removal
             noiseEquivalentSigma0, sigma0 = self.thermalNoiseRemoval(
                 polarization, algorithm='NERSC', localNoisePowerCompensation=False,
@@ -1522,7 +1525,7 @@ class Sentinel1Image(Nansat):
                 SD = np.sqrt( uniform_filter(sswS0**2, windowSize) - sswS0m**2 )
                 # simulate noise equivalent standard deviation (NESD)
                 simSD = noiseVarianceParameters['%s%s' % (self.obsMode, iSW)] * sswN0m * (1./SNNR)
-                # NESD compensation. See Eq.9 of the reference paper.
+                # NESD compensation. See Eq.9 of the reference paper R4.
                 sswS0 = (sswS0 - sswS0m) * (1. - simSD / SD) + sswS0m
                 sigma0[subswathIndexMap==iSW] = sswS0[sswi==iSW]
             sigma0[nanMask] = np.nan
