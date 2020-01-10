@@ -9,7 +9,7 @@
 # https://sentinel.esa.int/documents/247904/1877131/Sentinel-1-Level-1-Detailed-Algorithm-Definition
 # R3: Digital Processing of Synthetic Aperture Radar Data: Algorithms and Implementation
 #     Cumming and Wong, 2005, Artech House
-# R4: Textural Noise Correction for Sentinel-1 TOPSAR Cross-Polarization Channel Images
+# R4: Textural Noise Correction for Sentinel-1 TOPSAR Cross-Polarization Channel Images
 #     Park et al., 2019, IEEE TGRS 57(6):4040-4049. doi:10.1109/TGRS.2018.2889381
 
 
