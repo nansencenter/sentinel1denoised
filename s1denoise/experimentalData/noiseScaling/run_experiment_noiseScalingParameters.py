@@ -1,9 +1,17 @@
-import os, sys, glob, shutil
+import os
+import sys
+import glob
+import shutil
 from multiprocessing import Pool
-from sentinel1denoised.S1_TOPS_GRD_NoiseCorrection import Sentinel1Image
+from s1denoise import Sentinel1Image
 
-inputPath = '/Volumes/MacOS8TB/Archives/Sentinel-1/NorthAtlanticOcean/'
-outputPath = '/Volumes/MacOS8TB/Process/sentinel1denoised/experimentalData/noiseScaling/'
+inputPath = sys.argv[1]  #'/Volumes/MacOS8TB/Archives/Sentinel-1/NorthAtlanticOcean/'
+outputPath = sys.argv[2] #'/Volumes/MacOS8TB/Process/sentinel1denoised/experimentalData/noiseScaling/'
+
+try:
+    os.makedirs(outputPath)
+except:
+    pass
 
 def run_process(zipFile):
     outputFilename = zipFile.split('/')[-1].split('.')[0] + '_noiseScaling.npz'
