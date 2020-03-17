@@ -68,3 +68,49 @@ def run_denoising(ifile, pols=['HV'], db=False, filter_negative=False, **kwargs)
     n.set_metadata(s1.get_metadata())
 
     return n
+
+def run_correction(ifile,
+    angular_scale_hh=-0.2,
+    angular_scale_hv=-0.025,
+    angular_offset=34.5,
+    output_dtype=np.float32):
+    """ Run thermal, textural and angular correction of input Sentinel-1 file
+
+    Parameters
+    ----------
+    ifile : str
+        input file
+    angular_scale_hh : float
+        Scale for angular correction of sigma0 in HH
+    angular_scale_hv : float
+        Scale for angular correction of sigma0 in HV
+    angular_offset : float
+        Central angle for sigma0 normalization
+    output_dtype : dtype
+        Type of output array
+
+    Returns
+    --------
+    s1 : Nansat
+        object with corrected bands and metadata
+
+    """
+    scale = {
+        'HH': angular_scale_hh,
+        'HV': angular_scale_hv,
+    }
+
+    pols = ['HH', 'HV']
+    s1 = Sentinel1Image(ifile)
+    n = Nansat.from_domain(s1)
+    inc = s1['incidence_angle']
+    for pol in pols:
+        print('Correct %s band' % pol)
+        parameters = s1.get_metadata(band_id='sigma0_%s' % pol)
+        for i in ['dataType', 'PixelFunctionType', 'SourceBand', 'SourceFilename']:
+            parameters.pop(i)
+        array = s1.texturalNoiseRemoval2(pol)
+        array = 10 * np.log10(array) + scale[pol] * (inc - angular_offset)
+        n.add_band(array=array.astype(output_dtype), parameters=parameters)
+    n.set_metadata(s1.get_metadata())
+    return n

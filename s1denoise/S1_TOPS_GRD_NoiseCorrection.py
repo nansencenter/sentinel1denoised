@@ -18,7 +18,7 @@ import numpy as np
 from datetime import datetime, timedelta
 from xml.dom.minidom import parse, parseString
 from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
-from scipy.ndimage import convolve, uniform_filter
+from scipy.ndimage import convolve, uniform_filter, gaussian_filter
 from scipy.optimize import fminbound
 
 from nansat import Nansat
@@ -1534,3 +1534,35 @@ class Sentinel1Image(Nansat):
         # mask out pixels where the raw DNs are not valid
         sigma0[self.rawSigma0Map(polarization)==0] = np.nan
         return sigma0
+
+    def texturalNoiseRemoval2(self, polarization, window=3, weight=0.5, s0_min=0.0008):
+        """ Thermal noise removal followed by textural noise compensation using Method2
+
+        Method2 is implemented as a weighted average of sigma0 and sigma0 smoothed with
+        a gaussian filter. Weight of sigma0 is proportional to SNR. Total noise power
+        is preserved by ofsetting the output signal by mean noise.
+
+        Parameters
+        ----------
+        polarisation : str
+            'HH' or 'HV'
+        window : int
+            Size of window in the gaussian filter
+        weight : float
+            Weight of smoothed signal
+        s0_min : float
+            Minimum value of sigma0 for clipping
+
+        Returns
+        -------
+        sigma0 : 2d numpy.ndarray
+            Full size array with thermal and texture noise removed
+
+        """
+        nesz, s0 = self.thermalNoiseRemoval(polarization, 'NERSC', returnNESZ=True)
+        s0_offset = np.nanmean(nesz)
+        s0g = gaussian_filter(s0, window)
+        snr = s0g / nesz
+        s0o = (weight * s0g + snr * s0) / (weight + snr) + s0_offset
+
+        return s0o
