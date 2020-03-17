@@ -21,7 +21,9 @@ setup(
     author='Jeong-Won Park, Anton Korosov',
     author_email='jeong-won.park@nersc.no, anton.korosov@nersc.no',
     packages=find_packages(),
-    scripts=['s1denoise/scripts/s1_thermal_denoise.py'],
+    scripts=[
+        's1denoise/scripts/s1_correction.py',
+        's1denoise/scripts/s1_thermal_denoise.py'],
     package_data={'s1denoise' :['*.npz']},
     install_requires=[
         'nansat',
