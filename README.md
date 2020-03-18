@@ -55,11 +55,13 @@ from s1denoise import Sentinel1Image
 # open access to file with S1 data
 s1 = Sentinel1Image('/path/to/data/S1B_EW_GRDM_1SDH_INPUTFILE.zip')
 
-# run denoising of HV polarisoation
-s1.add_denoised_band('HV')
+# run thermal noise correction in HV polarisation
+s0_hv = s1.thermalNoiseRemoval('HV')
 
-# get array with denoised values
-s0_hv = s1['sigma0_HV_denoised']
+# run thermal and texture noise correction in HV polarisation
+s0_hv = s1.texturalNoiseRemoval('HV')
+
+
 ```
 
 Process a single file and export as GeoTIFF:
@@ -71,6 +73,9 @@ minimum positive value, process both HH and HV
 
 `s1_thermal_denoise.py INPUTFILE.zip OUTPUTFILE.tif -db -nn -p HHHV`
 
+Process a single file with thermal, textural and angular correction and export in dB
+
+`s1_correction.py INPUTFILE.zip OUTPUTFILE.tif`
 
 Process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
 
