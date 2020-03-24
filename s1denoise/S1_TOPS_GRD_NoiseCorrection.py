@@ -1540,7 +1540,8 @@ class Sentinel1Image(Nansat):
 
         Method2 is implemented as a weighted average of sigma0 and sigma0 smoothed with
         a gaussian filter. Weight of sigma0 is proportional to SNR. Total noise power
-        is preserved by ofsetting the output signal by mean noise.
+        is preserved by ofsetting the output signal by mean noise. Values below <s0_min>
+        are clipped to s0_min.
 
         Parameters
         ----------
@@ -1564,5 +1565,6 @@ class Sentinel1Image(Nansat):
         s0g = gaussian_filter(s0, window)
         snr = s0g / nesz
         s0o = (weight * s0g + snr * s0) / (weight + snr) + s0_offset
+        s0o[s0o < s0_min] = s0_min
 
         return s0o
