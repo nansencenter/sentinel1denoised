@@ -1560,6 +1560,8 @@ class Sentinel1Image(Nansat):
             Full size array with thermal and texture noise removed
 
         """
+        if self.IPFversion == 3.2:
+            self.IPFversion = 3.1
         nesz, s0 = self.thermalNoiseRemoval(polarization, 'NERSC', returnNESZ=True)
         s0_offset = np.nanmean(nesz)
         s0g = gaussian_filter(s0, window)
