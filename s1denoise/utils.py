@@ -110,7 +110,7 @@ def run_correction(ifile,
         for i in ['dataType', 'PixelFunctionType', 'SourceBand', 'SourceFilename']:
             parameters.pop(i)
         array = s1.texturalNoiseRemoval2(pol)
-        array = 10 * np.log10(array) + scale[pol] * (inc - angular_offset)
+        array = 10 * np.log10(array) - scale[pol] * (inc - angular_offset)
         n.add_band(array=array.astype(output_dtype), parameters=parameters)
     n.set_metadata(s1.get_metadata())
     return n
