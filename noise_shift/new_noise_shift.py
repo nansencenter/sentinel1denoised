@@ -133,8 +133,8 @@ for li in range(1, {'IW':3, 'EW':5}[n.obsMode]+1):
         # Convert signal and noise to db
         s0 = 10*np.log10(s0)
         nesz = 10*np.log10(nesz)
-        s0[s0==-inf] = np.nan
-        nesz[nesz==-inf] = np.nan
+        s0[s0==-inf] = 0
+        nesz[nesz==-inf] = 0
 
         #plot_burst(s0)
 
@@ -155,66 +155,58 @@ for li in range(1, {'IW':3, 'EW':5}[n.obsMode]+1):
         num_rows = 25
 
         # cut rows
-        cut_col = 200
+        cut_col = 100
 
         # signal rows
-        #a = np.nanmean(s0[middle_row-num_rows:middle_row+num_rows, cut_col:-cut_col:], axis=0)
+        #s0_roi = s0[middle_row-num_rows:middle_row+num_rows, cut_col:-cut_col:]
         # without cut
-        s0_db_roi = s0[middle_row - num_rows:middle_row + num_rows,:]
-        a = np.nanmean(s0_db_roi, axis=0)
+        s0_roi = s0[middle_row - num_rows:middle_row + num_rows,:]
+        a = np.nanmean(s0_roi, axis=0)
         #a = uniform_filter1d(a, 10)
 
         # noise rows
-        #b = np.nanmean(nesz[middle_row-num_rows:middle_row+num_rows, cut_col:-cut_col:], axis=0)
+        #nesz_roi = nesz[middle_row-num_rows:middle_row+num_rows, cut_col:-cut_col:]
         # without cut
-        nesz_db_roi = nesz[middle_row - num_rows:middle_row + num_rows, :]
-        b = np.nanmean(nesz_db_roi, axis=0)
+        nesz_roi = nesz[middle_row - num_rows:middle_row + num_rows, :]
+        b = np.nanmean(nesz_roi, axis=0)
         #b = uniform_filter1d(b, 10)
 
         a = (a - np.nanmean(a)) / (np.nanstd(a) * len(a))
         b = (b - np.nanmean(b)) / (np.nanstd(b))
         c = np.correlate(a, b, 'full')
 
-        # peak position
-        ij = np.unravel_index(np.argmax(c), c.shape)
+        #print('\nc: %s\n' % c)
 
-        print('\n%s' % a[np.isnan(a)==False])
-        #print('%s\n' % s0_db_roi)
-        print('\n%s' % b[np.isnan(b)==False])
-        #print('%s\n' % nesz_db_roi)
+        # peak position
+        #ij = np.unravel_index(np.argmax(c), c.shape)
+        peak_pos = np.nanargmax(c)
 
         print('max cc: %.2f  peak pos.: %s  length: %s' %
-              (np.nanmax(c), ij, len(c)))
+              (np.nanmax(c), peak_pos, len(c)))
+        print(range(len(c)))
 
 
         #plt.title('Normilized cross correlation (NCC) between Sigma0 and NESZ')
 
-
-        #if i == 7:
-        #    var_name = 'ax%s' % (i-1)
-        #else:
         var_name = 'ax%s' % (i+1)
 
-
-        #var_name = 'ax%s' % i
-
-        # = var_name
         try:
             globals()[var_name].set_title('Burst %s' % (i+1), fontsize=20)
             globals()[var_name].set_ylim([0,1])
             globals()[var_name].plot(range(len(c)), c, 'b-', label='NCC')
 
             # Obtained peak position
-            globals()[var_name].plot([ij, ij], [np.nanmin(c), np.nanmax(c)],
+            globals()[var_name].plot([peak_pos, peak_pos], [np.nanmin(c), np.nanmax(c)],
                                      'r--', label = 'NCC peak pos.')
 
             # True peak position
-            globals()[var_name].plot([len(c)/2., len(c)/2.], [np.nanmin(c), np.nanmax(c)], 'k--', label='The true center')
+            globals()[var_name].plot([len(c)/2., len(c)/2.], [np.nanmin(c), np.nanmax(c)],
+                                     'k--', label='The true center')
 
             globals()[var_name].legend(loc=2, prop=dict(size=14))
 
             # calculate shift
-            s0_nesz_shift = abs(len(c)/2. -  ij[0])
+            s0_nesz_shift = abs(len(c)/2. -  peak_pos)
             if s0_nesz_shift < 1.:
                 s0_nesz_shift = 0.
 
