@@ -59,6 +59,28 @@ def norm8(img):
     img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
     return img
 
+def format_func(value, tick_number):
+    try:
+        N = '%2.0f' % ia_mean[int(value)]
+    except:
+        N = '%2.0f' % ia_mean[-1]
+    return N
+
+def plot_png_denoised(data, ia_mean, pref):
+    """ Plot denoised png """
+    plt.clf()
+    fig, ax = plt.subplots()
+    plt.xlabel('Incidence angle')
+    plt.ylabel('Azimuth line')
+    plt.title(pref, fontsize='medium')
+    plt.imshow(data, cmap='gray', interpolation='bilinear')
+    # list comprehension to get all tick labels...
+    tickla = ['%2.0f' % tick for tick in ia_mean]
+    ax.xaxis.set_ticklabels(tickla)
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
+    plt.savefig('%s_%s.png' % (pref, os.path.basename(fname)),
+                bbox_inches='tight', vmin=-50, vmax=-5, dpi=300)
+
 try:
     os.makedirs('noise')
 except:
@@ -97,10 +119,10 @@ ia = n['incidence_angle']
 s0_hv = n['sigma0_HV']
 noise_hv = n['noise_HV']
 
-plt.clf()
-s0_hv_db = 10 * np.log10(s0_hv)
-plt.imshow(s0_hv_db, cmap='gray', vmin=-50, vmax=-5)
-plt.savefig('s0_hv.png', bbox_inches='tight')
+# Plot signal image
+s0_hv_db = 10*np.log10(s0_hv)
+ia_mean = np.nanmean(ia, axis=0)
+plot_png_denoised(s0_hv_db, ia_mean, 'test')
 
 swath_bounds = n.import_swathBounds('HV')
 
