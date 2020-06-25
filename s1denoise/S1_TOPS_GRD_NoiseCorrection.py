@@ -1283,7 +1283,6 @@ class Sentinel1Image(Nansat):
                 results[subswathID]['fitResidual'].append(fitResidual)
         np.savez(self.name.split('.')[0] + '_noiseScaling.npz', **results)
 
-
     def experiment_powerBalancing(self, polarization, numberOfLinesToAverage=1000):
         ''' Generate experimental data for interswath power balancing parameter optimization '''
         # see section III.C of the reference, R1.
@@ -1296,13 +1295,20 @@ class Sentinel1Image(Nansat):
             noiseEquivalentSigma0 *= self.scallopingGainMap(polarization)
         rawNoiseEquivalentSigma0 = noiseEquivalentSigma0.copy()
         noiseScalingParameters = self.import_denoisingCoefficients(polarization)[0]
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+
+        # !TEMP
+        print('\nNOISE SCALING PARAMS: %s \n' % noiseScalingParameters)
+
+        for iSW in range(1, {'IW': 3, 'EW': 5}[self.obsMode]+1):
             valid = (subswathIndexMap==iSW)
             noiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
+
         validLineIndices = np.argwhere(
-            np.sum(subswathIndexMap!=0,axis=1)==self.shape()[1])
+            np.sum(subswathIndexMap!=0,axis=1) == self.shape()[1])
+
         blockBounds = np.arange(validLineIndices.min(), validLineIndices.max(),
                                 numberOfLinesToAverage, dtype='uint')
+
         results = { '%s%s' % (self.obsMode, li):
                         { 'sigma0':[],
                           'noiseEquivalentSigma0':[],
@@ -1311,6 +1317,9 @@ class Sentinel1Image(Nansat):
                           'fitResidual':[] }
                     for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
         results['IPFversion'] = self.IPFversion
+
+        print('\nresults IPFversion  = %s\n' % results['IPFversion'])
+
         for iBlk in range(len(blockBounds)-1):
             if landmask[blockBounds[iBlk]:blockBounds[iBlk+1]].sum() != 0:
                 continue
@@ -1322,7 +1331,7 @@ class Sentinel1Image(Nansat):
             if pixelValidity.sum() <= (blockS0.shape[1] * 0.9):
                 continue
             fitCoefficients = []
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in range(1, {'IW': 3, 'EW': 5}[self.obsMode]+1):
                 subswathID = '%s%s' % (self.obsMode, iSW)
                 pixelIndex = np.nonzero((blockSWI==iSW).sum(axis=0) * pixelValidity)[0][cPx:-cPx]
                 if pixelIndex.sum()==0:
@@ -1337,13 +1346,19 @@ class Sentinel1Image(Nansat):
                 results[subswathID]['correlationCoefficient'].append(np.corrcoef(meanS0, meanN0)[0,1])
                 results[subswathID]['fitResidual'].append(fitResults[1].item())
             balancingPower = np.zeros(5)
-            for li in range(4):
-                interswathBounds = ( np.where(np.gradient(blockSWI,axis=1)==0.5)[1]
-                                     .reshape(4*numberOfLinesToAverage,2)[li::4].mean() )
+
+            for li in range(2):
+                print(li)
+                print('\n%s\n' % (np.where(np.gradient(blockSWI, axis=1) == 0.5)[1]))
+                interswathBounds = (np.where(np.gradient(blockSWI, axis=1) == 0.5)[1]
+                                    .reshape(2 * numberOfLinesToAverage, 2)[li::4].mean())
                 power1 = fitCoefficients[li][0] * interswathBounds + fitCoefficients[li][1]
-                power2 = fitCoefficients[li+1][0] * interswathBounds + fitCoefficients[li+1][1]
-                balancingPower[li+1] = power2 - power1
+                power2 = fitCoefficients[li + 1][0] * interswathBounds + fitCoefficients[li + 1][1]
+                balancingPower[li + 1] = power2 - power1
             balancingPower = np.cumsum(balancingPower)
+
+            print('OK2')
+
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
                 valid = (blockSWI==iSW)
                 blockN0[valid] += balancingPower[iSW-1]
@@ -1351,8 +1366,15 @@ class Sentinel1Image(Nansat):
             powerBias = np.nanmean((blockRN0-blockN0)[blockSWI>=2])
             balancingPower += powerBias
             blockN0 += powerBias
+
+            print('OK3')
+
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
                 results['%s%s' % (self.obsMode, iSW)]['balancingPower'].append(balancingPower[iSW-1])
+
+                # !TEMP
+                print('## balancingPower[iSW - 1] = %s' % balancingPower[iSW - 1])
+
         np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
 
     def experiment_extraScaling(self, polarization):
