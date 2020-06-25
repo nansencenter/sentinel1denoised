@@ -1347,7 +1347,7 @@ class Sentinel1Image(Nansat):
                 results[subswathID]['fitResidual'].append(fitResults[1].item())
             balancingPower = np.zeros(5)
 
-            for li in range(2):
+            for li in range(self.import_swathBounds(polarization)-1):
                 print(li)
                 print('\n%s\n' % (np.where(np.gradient(blockSWI, axis=1) == 0.5)[1]))
                 interswathBounds = (np.where(np.gradient(blockSWI, axis=1) == 0.5)[1]
