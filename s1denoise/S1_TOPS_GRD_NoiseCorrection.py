@@ -1570,3 +1570,170 @@ class Sentinel1Image(Nansat):
         s0o[s0o < s0_min] = s0_min
 
         return s0o
+
+    # !TODO: the following three functions are need testing!
+    def get_s0_nesz(self, polarization):
+        """ Get Sigma0 and NESZ """
+        n = Sentinel1Image(self)
+        results = {}
+        results['src'] = os.path.basename(self.filename)
+        results['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
+        sz = self.rawSigma0Map(polarization=polarization)
+        sz[sz == 0] = np.nan
+        results['sz'] = np.nanmean(sz, axis=0)
+        results['nesz_esa'] = np.nanmean(self.rawNoiseEquivalentSigma0Map(polarization=polarization), axis=0)
+        results['nesz_nersc'] = np.nanmean(self.modifiedNoiseEquivalentSigma0Map(polarization=polarization), axis=0)
+
+        return results
+
+    # !TODO: clean ugly code
+    def plot_qa(self, nersc_data, esa_data):
+        """ Plot quality assesment results """
+
+        # plt.style.use('seaborn-whitegrid')
+        plt.clf()
+
+        # Func to draw line segment
+        def newline(p1, p2, color='black'):
+            ax = plt.gca()
+            l = mlines.Line2D([p1[0], p2[0]], [p1[1], p2[1]], color='skyblue')
+            ax.add_line(l)
+            return l
+
+        def plot_coeff_comparison(x_list, nersc_data, esa_data, fig_name, fig_title, swath_names):
+            # Vertical decoration lines
+            for il in range(len(x_list) + 1):
+                # print(il)
+                ax.vlines(x=il, ymin=-np.nanmax(data) * 2, ymax=np.nanmax(data) * 2,
+                          color='black', alpha=1, linewidth=1, linestyles='dotted')
+
+            # Data lines
+            # for i, idata in enumerate(data):
+            #    newline([x_list[i], idata], [x_list[i], data2[i]])
+            # print([x_list[i], idata], [x_list[i], data2[i]])
+
+            # Points
+            # ax.scatter(y=data, x=x_list, s=150, color='#a3c4dc', alpha=0.7, label = 'ESA', zorder=-1)
+
+            label_esa = 'ESA = %.3f' % (np.nanmean(q_ll_esa))
+            label_nersc = 'NERSC = %.3f' % np.nanmean(q_ll_nersc)
+
+            ax.scatter(y=esa_data, x=x_list, s=150, color='#11151C', alpha=0.7, label=label_esa, zorder=-1)
+            # ax.scatter(y=data2, x=x_list, s=150, color='#0e668b', alpha=0.7, label = 'NERSC', zorder=9)
+            ax.scatter(y=nersc_data, x=x_list, s=150, color='#EC4E20', alpha=0.7, label=label_nersc, zorder=9)
+
+            # Error bar
+            # ax.errorbar(y=data2, x=x_list, yerr=data_rmse, fmt='.k', label='DD RMSE', zorder=10)
+
+            # Decoration
+            font_size = 22
+            ax.set_facecolor('#f7f7f7')
+            ax.set_title(fig_title, fontdict={'size': font_size})
+
+            # Min and max of data
+            min_data_nersc = np.min(nersc_data)
+            min_data = np.min(esa_data)
+
+            if min_data_nersc < min_data:
+                min_data = min_data_nersc
+
+            max_data_nersc = np.max(nersc_data)
+            max_data = np.max(esa_data)
+            if max_data_nersc > max_data:
+                max_data = max_data_nersc
+
+            # ax.set(xlim=(min(x_list) - 0.5, max(x_list) + 0.5), ylim=(min_data - abs(min_data) * 0.3, max_data * 1.3))
+            ax.set(xlim=(min(x_list) - 0.5, max(x_list) + 0.5), ylim=(-0.1, 1.))
+            ax.set_ylabel('Denoising qulaity metric', fontsize=font_size)
+            ax.set_xticks(x_list)
+            ax.set_xticklabels(swath_names, fontdict={'size': font_size})
+            # ax.set_xticklabels(['5%', '15%', '20%', '25%'])
+
+            # Legend
+            plt.legend(loc="upper right", prop={'size': 24})
+
+            # Out path for figures
+            plt.savefig('qa_%s.png' % fig_name, bbox_inches='tight', dpi=300)
+            plt.show()
+
+    def quality_assesment(self, polarization):
+        """
+        Denoising quality assessment at the subswath borders by Fisher's criteria
+        """
+
+        swath_bounds = self.import_swathBounds(polarization)
+
+        # denoise results (s0-nesz)
+        res = get_s0_nesz(self)
+
+        s0_hv_esa = res['sz'] - res['nesz_esa']
+        s0_hv_nersc = res['sz'] - res['nesz_nersc']
+
+        # for each burst
+        q_ll_nersc = []
+        q_ll_esa = []
+
+        # mean for bursts within subswath
+        q_ll_nersc_ss = []
+        q_ll_esa_ss = []
+
+        print('\nDenoise evaluation...\n')
+        for li in range(1, {'IW': 3, 'EW': 5}[n.obsMode]):
+            print('\n\n%s%s-%s%s' % (self.obsMode, li, self.obsMode, li+1))
+            subswath_name = '%s%s' % (self.obsMode, li)
+            # globals()[var_name] = var_name
+
+            # lists to average all bursts within subswath
+            q_temp_nersc = []
+            q_temp_esa = []
+
+            for i in range(len(swath_bounds[subswath_name]['firstAzimuthLine'])):
+
+
+                middle_az = round((swath_bounds[subswath_name]['firstAzimuthLine'][i]-\
+                            swath_bounds[subswath_name]['lastAzimuthLine'][i])/2)
+
+                num_px = 100
+
+                # NERSC
+                # First burst patch
+                s0_01 = s0_hv_nersc[middle_az - num_px:middle_az + num_px,
+                        swath_bounds[subswath_name]['lastRangeSample'][i] - num_px:
+                        swath_bounds[subswath_name]['lastRangeSample'][i]]
+                s0_01_std = np.nanstd(s0_01)
+
+                # Second burst patch
+                s0_02 = s0_hv_nersc[middle_az - num_px:middle_az + num_px,
+                        swath_bounds[subswath_name]['lastRangeSample'][i] + 1:
+                        swath_bounds[subswath_name]['lastRangeSample'][i] + num_px]
+                s0_02_std = np.nanstd(s0_02)
+
+                # ESA
+                s0_01_esa = s0_hv_esa[middle_az - num_px:middle_az + num_px,
+                            swath_bounds[subswath_name]['lastRangeSample'][i] - num_px:
+                            swath_bounds[subswath_name]['lastRangeSample'][i]]
+                s0_01_esa_std = np.nanstd(s0_01_esa)
+
+                s0_02_esa = s0_hv_esa[middle_az - num_px:middle_az + num_px,
+                            swath_bounds[subswath_name]['lastRangeSample'][i] + 1:
+                            swath_bounds[subswath_name]['lastRangeSample'][i] + num_px]
+                s0_02_esa_std = np.nanstd(s0_02_esa)
+
+                q_nersc = (np.nanmean(s0_01) - np.nanmean(s0_02)) / (s0_01_std + s0_02_std)
+                q_esa = (np.nanmean(s0_01_esa) - np.nanmean(s0_02_esa)) / (s0_01_esa_std + s0_02_esa_std)
+
+                q_ll_nersc.append(q_nersc)
+                q_ll_esa.append(q_esa)
+
+                q_temp_nersc.append(q_nersc)
+                q_temp_esa.append(q_esa)
+
+                print('Quality assesment for burst %s (NERSC/ESA) = %.3f/%.3f' % (i, q_nersc, q_esa))
+
+            q_ll_nersc_ss.append(np.nanmean(q_temp_nersc))
+            q_ll_esa_ss.append(np.nanmean(q_temp_esa))
+
+        print('\nMean quality assesment NERSC: %s\n' % np.nanmean(q_ll_nersc))
+        print('Mean quality assesment ESA: %s\n' % np.nanmean(q_ll_esa))
+
+        return q_ll_nersc_ss, q_ll_esa_ss
