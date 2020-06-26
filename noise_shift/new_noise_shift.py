@@ -17,6 +17,8 @@ import os
 import cv2
 from numpy import inf
 
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
 from scipy.ndimage import uniform_filter1d
 
 
@@ -57,6 +59,7 @@ def plot_burst(s0_hv):
 def norm8(img):
     """Convert image to data type uint8"""
     img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+
     return img
 
 def format_func(value, tick_number):
@@ -64,6 +67,7 @@ def format_func(value, tick_number):
         N = '%2.0f' % ia_mean[int(value)]
     except:
         N = '%2.0f' % ia_mean[-1]
+
     return N
 
 def plot_png_denoised(data, ia_mean, pref):
@@ -73,11 +77,19 @@ def plot_png_denoised(data, ia_mean, pref):
     plt.xlabel('Incidence angle')
     plt.ylabel('Azimuth line')
     plt.title(pref, fontsize='medium')
-    plt.imshow(data, cmap='gray', interpolation='bilinear')
+    im = plt.imshow(data, cmap='gray', interpolation='bilinear')
     # list comprehension to get all tick labels...
     tickla = ['%2.0f' % tick for tick in ia_mean]
     ax.xaxis.set_ticklabels(tickla)
     ax.xaxis.set_major_formatter(plt.FuncFormatter(format_func))
+
+    # create an axes on the right side of ax. The width of cax will be 5%
+    # of ax and the padding between cax and ax will be fixed at 0.05 inch.
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    cbar = plt.colorbar(im, cax=cax)
+    cbar.set_label('[dB]') #, rotation=270)
+
     plt.savefig('%s_%s.png' % (pref, os.path.basename(fname)),
                 bbox_inches='tight', vmin=-50, vmax=-5, dpi=300)
 
@@ -97,7 +109,6 @@ except:
     pass
 
 #fname = "/mnt/sverdrup-2/sat_auxdata/denoise/north_atl/s1/ew/zip/201806260830-201906261000/S1A_EW_GRDM_1SDH_20180629T065044_20180629T065142_022568_0271D6_5131.zip"
-
 #fname = "/mnt/sverdrup-2/sat_auxdata/denoise/norway_nordic_sea/s1/ew/zip/desc_5E_70N_201907010000-2020012800/S1B_EW_GRDM_1SDH_20190907T062508_20190907T062608_017928_021BE5_4887.zip"
 #fname = '/mnt/sverdrup-2/sat_auxdata/denoise/norway_nordic_sea/s1/ew/zip/201906261000-202002041121/S1A_EW_GRDM_1SDH_20190929T073105_20190929T073205_029233_035224_2930.zip'
 #fname = '/mnt/sverdrup-2/sat_auxdata/denoise/norway_nordic_sea/s1/ew/zip/desc_5E_70N_201907010000-2020012800/S1B_EW_GRDM_1SDH_20191130T062509_20191130T062609_019153_024264_9EB7.zip'
@@ -167,7 +178,6 @@ for li in range(1, {'IW':3, 'EW':5}[n.obsMode]+1):
         plt.savefig('s0/s0_%s_%s.png' % (subswath_name, i), bbox_inches='tight')
         '''
 
-
         # normilized cross-correlation of noise and sigma0
 
         # signal row
@@ -184,14 +194,14 @@ for li in range(1, {'IW':3, 'EW':5}[n.obsMode]+1):
         # without cut
         s0_roi = s0[middle_row - num_rows:middle_row + num_rows,:]
         a = np.nanmean(s0_roi, axis=0)
-        #a = uniform_filter1d(a, 10)
+        a = uniform_filter1d(a, 10)
 
         # noise rows
         #nesz_roi = nesz[middle_row-num_rows:middle_row+num_rows, cut_col:-cut_col:]
         # without cut
         nesz_roi = nesz[middle_row - num_rows:middle_row + num_rows, :]
         b = np.nanmean(nesz_roi, axis=0)
-        #b = uniform_filter1d(b, 10)
+        b = uniform_filter1d(b, 10)
 
         a = (a - np.nanmean(a)) / (np.nanstd(a) * len(a))
         b = (b - np.nanmean(b)) / (np.nanstd(b))
