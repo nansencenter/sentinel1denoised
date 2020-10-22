@@ -1330,7 +1330,9 @@ class Sentinel1Image(Nansat):
             pixelValidity = (np.nanmean(blockS0 - blockRN0 * 0.5, axis=0) > 0)
             if pixelValidity.sum() <= (blockS0.shape[1] * 0.9):
                 continue
+
             fitCoefficients = []
+            # Loop over sub-blocks within a block (block divided by sub-swath parts)
             for iSW in range(1, {'IW': 3, 'EW': 5}[self.obsMode]+1):
                 subswathID = '%s%s' % (self.obsMode, iSW)
                 pixelIndex = np.nonzero((blockSWI==iSW).sum(axis=0) * pixelValidity)[0][cPx:-cPx]
@@ -1345,21 +1347,19 @@ class Sentinel1Image(Nansat):
                 results[subswathID]['noiseEquivalentSigma0'].append(meanRN0)
                 results[subswathID]['correlationCoefficient'].append(np.corrcoef(meanS0, meanN0)[0,1])
                 results[subswathID]['fitResidual'].append(fitResults[1].item())
-
-            # IW/EW
             balancingPower = np.zeros({'IW': 3, 'EW': 5}[self.obsMode])
 
+            # Loop over sub-swath margins within a block
             for li in range(len(self.import_swathBounds(polarization))-1):
-                print(li)
-                print('\n%s\n' % (np.where(np.gradient(blockSWI, axis=1) == 0.5)[1]))
+                # Calculate pixel coordinate of interswath boundaries
                 interswathBounds = (np.where(np.gradient(blockSWI, axis=1) == 0.5)[1]
                                     .reshape(2 * numberOfLinesToAverage, 2)[li::4].mean())
+                # Compute power left to a boundary as slope*interswathBounds + residual coef.
                 power1 = fitCoefficients[li][0] * interswathBounds + fitCoefficients[li][1]
-                power2 = fitCoefficients[li + 1][0] * interswathBounds + fitCoefficients[li + 1][1]
-                balancingPower[li + 1] = power2 - power1
+                # Compute power right to a boundary as slope*interswathBounds + residual coef.
+                power2 = fitCoefficients[li+1][0] * interswathBounds + fitCoefficients[li+1][1]
+                balancingPower[li+1] = power2 - power1
             balancingPower = np.cumsum(balancingPower)
-
-            print('OK2')
 
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
                 valid = (blockSWI==iSW)
