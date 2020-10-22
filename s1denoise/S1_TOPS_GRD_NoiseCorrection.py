@@ -1345,6 +1345,8 @@ class Sentinel1Image(Nansat):
                 results[subswathID]['noiseEquivalentSigma0'].append(meanRN0)
                 results[subswathID]['correlationCoefficient'].append(np.corrcoef(meanS0, meanN0)[0,1])
                 results[subswathID]['fitResidual'].append(fitResults[1].item())
+
+            # IW/EW
             balancingPower = np.zeros({'IW': 3, 'EW': 5}[self.obsMode])
 
             for li in range(len(self.import_swathBounds(polarization))-1):
