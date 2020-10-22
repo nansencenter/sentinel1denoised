@@ -1369,13 +1369,8 @@ class Sentinel1Image(Nansat):
             balancingPower += powerBias
             blockN0 += powerBias
 
-            print('OK3')
-
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
                 results['%s%s' % (self.obsMode, iSW)]['balancingPower'].append(balancingPower[iSW-1])
-
-                # !TEMP
-                print('## balancingPower[iSW - 1] = %s' % balancingPower[iSW - 1])
 
         np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
 
