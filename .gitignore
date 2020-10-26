@@ -64,3 +64,5 @@ target/
 
 # OS generated files
 .DS_Store
+
+fit_on_one
