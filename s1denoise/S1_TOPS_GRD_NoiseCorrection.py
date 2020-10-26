@@ -1590,7 +1590,6 @@ class Sentinel1Image(Nansat):
 
         return s0o
 
-    # !TODO: the following three functions are need testing!
     def get_s0_nesz(self, polarization):
         """ Get profiles of Sigma0 and NESZ """
         results = {}
@@ -1598,9 +1597,9 @@ class Sentinel1Image(Nansat):
         results['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
         sz = self.rawSigma0Map(polarization=polarization)
         sz[sz == 0] = np.nan
-        results['sz'] = np.nanmean(sz, axis=0)
-        results['nesz_esa'] = np.nanmean(self.rawNoiseEquivalentSigma0Map(polarization=polarization), axis=0)
-        results['nesz_nersc'] = np.nanmean(self.modifiedNoiseEquivalentSigma0Map(polarization=polarization), axis=0)
+        results['sz'] = sz
+        results['nesz_esa'] = self.rawNoiseEquivalentSigma0Map(polarization=polarization)
+        results['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
         return results
 
     # !TODO: clean ugly code
@@ -1681,7 +1680,7 @@ class Sentinel1Image(Nansat):
         swath_bounds = self.import_swathBounds(polarization)
 
         # denoise results (s0-nesz)
-        res = self.get_s0_nesz()
+        res = self.get_s0_nesz(polarization)
 
         s0_hv_esa = res['sz'] - res['nesz_esa']
         s0_hv_nersc = res['sz'] - res['nesz_nersc']
