@@ -6,7 +6,7 @@ https://doi.org/10.1109/TGRS.2017.2765248
 
 In BibTeX format:
 
-@ARTICLE{8126233,
+@ARTICLE{8126233,
 author={J. {Park} and A. A. {Korosov} and M. {Babiker} and S. {Sandven} and J. {Won}},
 journal={IEEE Transactions on Geoscience and Remote Sensing},
 title={Efficient Thermal Noise Removal for Sentinel-1 TOPSAR Cross-Polarization Channel},
