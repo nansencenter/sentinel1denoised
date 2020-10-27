@@ -1602,76 +1602,6 @@ class Sentinel1Image(Nansat):
         results['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
         return results
 
-    # !TODO: clean code
-    def plot_qa(self, nersc_data, esa_data):
-        """ Plot quality assesment results """
-
-        # plt.style.use('seaborn-whitegrid')
-        plt.clf()
-
-        # Func to draw line segment
-        def newline(p1, p2, color='black'):
-            ax = plt.gca()
-            l = mlines.Line2D([p1[0], p2[0]], [p1[1], p2[1]], color='skyblue')
-            ax.add_line(l)
-            return l
-
-        def plot_coeff_comparison(x_list, nersc_data, esa_data, fig_name, fig_title, swath_names):
-            # Vertical decoration lines
-            for il in range(len(x_list) + 1):
-                # print(il)
-                ax.vlines(x=il, ymin=-np.nanmax(data) * 2, ymax=np.nanmax(data) * 2,
-                          color='black', alpha=1, linewidth=1, linestyles='dotted')
-
-            # Data lines
-            # for i, idata in enumerate(data):
-            #    newline([x_list[i], idata], [x_list[i], data2[i]])
-            # print([x_list[i], idata], [x_list[i], data2[i]])
-
-            # Points
-            # ax.scatter(y=data, x=x_list, s=150, color='#a3c4dc', alpha=0.7, label = 'ESA', zorder=-1)
-
-            label_esa = 'ESA = %.3f' % (np.nanmean(q_ll_esa))
-            label_nersc = 'NERSC = %.3f' % np.nanmean(q_ll_nersc)
-
-            ax.scatter(y=esa_data, x=x_list, s=150, color='#11151C', alpha=0.7, label=label_esa, zorder=-1)
-            # ax.scatter(y=data2, x=x_list, s=150, color='#0e668b', alpha=0.7, label = 'NERSC', zorder=9)
-            ax.scatter(y=nersc_data, x=x_list, s=150, color='#EC4E20', alpha=0.7, label=label_nersc, zorder=9)
-
-            # Error bar
-            # ax.errorbar(y=data2, x=x_list, yerr=data_rmse, fmt='.k', label='DD RMSE', zorder=10)
-
-            # Decoration
-            font_size = 22
-            ax.set_facecolor('#f7f7f7')
-            ax.set_title(fig_title, fontdict={'size': font_size})
-
-            # Min and max of data
-            min_data_nersc = np.min(nersc_data)
-            min_data = np.min(esa_data)
-
-            if min_data_nersc < min_data:
-                min_data = min_data_nersc
-
-            max_data_nersc = np.max(nersc_data)
-            max_data = np.max(esa_data)
-            if max_data_nersc > max_data:
-                max_data = max_data_nersc
-
-            # ax.set(xlim=(min(x_list) - 0.5, max(x_list) + 0.5), ylim=(min_data - abs(min_data) * 0.3, max_data * 1.3))
-            ax.set(xlim=(min(x_list) - 0.5, max(x_list) + 0.5), ylim=(-0.1, 1.))
-            ax.set_ylabel('Denoising qulaity metric', fontsize=font_size)
-            ax.set_xticks(x_list)
-            ax.set_xticklabels(swath_names, fontdict={'size': font_size})
-            # ax.set_xticklabels(['5%', '15%', '20%', '25%'])
-
-            # Legend
-            plt.legend(loc="upper right", prop={'size': 24})
-
-            # Out path for figures
-            plt.savefig('qa_%s.png' % fig_name, bbox_inches='tight', dpi=300)
-            plt.show()
-
     def quality_assesment(self, polarization, num_px = 100):
         '''
         Denoising quality assessment at the subswath margins by Fisher's criteria
@@ -1688,7 +1618,7 @@ class Sentinel1Image(Nansat):
         -------
         q_ll_nersc_ss : list
         q_ll_esa_ss : list
-            Lists with a mean values of quality metric values at sub-swath margins aberaged for bursts
+            Lists with a mean values of quality metric values at sub-swath margins averaged for bursts
         '''
 
         swath_bounds = self.import_swathBounds(polarization)
@@ -1759,7 +1689,8 @@ class Sentinel1Image(Nansat):
             q_ll_nersc_ss.append(np.nanmean(q_temp_nersc))
             q_ll_esa_ss.append(np.nanmean(q_temp_esa))
 
-        print('\nMean quality assesment NERSC: %s' % np.nanmean(q_ll_nersc))
-        print('Mean quality assesment ESA: %s\n' % np.nanmean(q_ll_esa))
+        print('\nMean quality assessment NERSC: %s' % np.nanmean(q_ll_nersc))
+        print('Mean quality assessment ESA: %s\n' % np.nanmean(q_ll_esa))
 
         return q_ll_nersc_ss, q_ll_esa_ss
+
