@@ -83,5 +83,5 @@ Process a single file using Docker (replace `input_dir` and `output_dir` with ac
 
 ## Experimental scripts
 
-Sub-directories in `s1denoise/experimentalData` contain scripts for training the noise scaling and power balancing coefficients.
+Sub-directories in `s1denoise/experimentalData` contain scripts for training the noise scaling and power balancing coefficients and extra scaling.
 See README files in these sub-dirs for details.
