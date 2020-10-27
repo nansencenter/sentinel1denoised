@@ -1,7 +1,7 @@
 # Sentinel1Denoised
 Thermal noise subtraction, scalloping correction, angular correction
 
-# Citation
+## Citation
 
 If you use Sentinel1Denoised in any academic work then you *must* cite the following paper:
 
@@ -12,7 +12,7 @@ Park, Jeong-Won; Won, Joong-Sun; Korosov, Anton A.; Babiker, Mohamed; and Mirand
 
 See the CITATION file for more information.
 
-# Installation
+## Installation
 The software is written in Python and requires
 [nansat](https://nansat.readthedocs.io/en/latest/source/installation.html)
 and [scipy](https://www.scipy.org/install.html) packages. A simple way to install these packages
@@ -26,7 +26,7 @@ git clone https://github.com/nansencenter/sentinel1denoised.git
 conda create -y -n s1denoise gdal numpy pillow netcdf4 scipy requests
 
 # activate environment
-conda activate py3s1denoise
+conda activate s1denoise
 
 # install nansat
 pip install https://github.com/nansencenter/nansat/archive/master.zip
@@ -47,7 +47,7 @@ docker run --rm -it -v /path/to/data:/path/to/data s1denoise python
 
 ```
 
-# Example
+## Example
 
 Do processing inside Python environment:
 ```python
@@ -80,3 +80,8 @@ Process a single file with thermal, textural and angular correction and export i
 Process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
 
 `docker run --rm -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_thermal_denoise.py /input_dir/INPUTFILE.zip /output_dir/OUPUTFILE.tif`
+
+## Experimental scripts
+
+Sub-directories in `s1denoise/experimentalData` contain scripts for training the noise scaling and power balancing coefficients.
+See README files in these sub-dirs for details.
