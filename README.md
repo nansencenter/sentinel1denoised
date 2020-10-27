@@ -23,7 +23,7 @@ is to use [Anaconda](https://docs.conda.io/en/latest/miniconda.html).
 git clone https://github.com/nansencenter/sentinel1denoised.git
 
 # create conda environment with key requirements
-conda create -y -n py3s1denoise gdal=2.4.1 numpy pillow netcdf4 scipy requests
+conda create -y -n s1denoise gdal numpy pillow netcdf4 scipy requests
 
 # activate environment
 conda activate py3s1denoise
