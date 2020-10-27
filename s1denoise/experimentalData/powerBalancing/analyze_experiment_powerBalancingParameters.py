@@ -1,19 +1,36 @@
 import os
-import os
-import os
 import sys
 import glob
 import datetime
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 plt.clf()
 plt.figure(figsize=(15,4))
 
-platform = 'S1A'
-#platform = 'S1B'
-mode = 'EW'
-region = 'NA'
+# run example:
+# run analyze_experiment_powerBalancingParameters.py S1A  /mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip
+
+
+mode = 'IW'
+grd_mode = 'GRDH'
+
+platform = sys.argv[1]
+
+if not platform in ['S1A', 'S1B']:
+    print('The input data must be S1A or S1B')
+    exit()
+
+# Input directory with S1 files
+inputPath = sys.argv[2]  #'/mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip
+
+# Output directory for storing statistics for individual files
+outputPath = sys.argv[3] #'/mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/noise_scaling'
+
+# update npz files
+update_npz_files = True
 
 # dir path to noise scaling training data
 in_path = sys.argv[1]
