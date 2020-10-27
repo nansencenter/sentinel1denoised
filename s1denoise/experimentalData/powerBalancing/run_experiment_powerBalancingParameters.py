@@ -4,24 +4,43 @@ import glob
 import shutil
 from multiprocessing import Pool
 from s1denoise import Sentinel1Image
+from sys import exit
 
-# dir path to noise scaling training data
-inputPath = sys.argv[1]
-outputPath = sys.argv[2]
+# run example:
+# run run_experiment_powerBalancingParameters.py S1A /mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip /mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing
 
-#inputPath = '/Volumes/MacOS8TB/Archives/Sentinel-1/NorthAtlanticOcean/'
-#outputPath = '/Volumes/MacOS8TB/Process/sentinel1denoised/experimentalData/powerBalancing/'
+# Instrument
+instrument = sys.argv[1]
+
+if not instrument in ['S1A', 'S1B']:
+    print('The input data must be S1A or S1B')
+    exit()
+
+# Input directory with S1 files
+inputPath = sys.argv[2]  #'/mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip
+
+# Output directory for storing statistics for individual files
+outputPath = sys.argv[3] #'/mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing'
+
+zipFilesAll = glob.glob('%s/*%s*.zip' % (inputPath, instrument))
+
+# try make directory for output npz files
+try:
+    os.makedirs(outputPath)
+except:
+    pass
 
 def run_process(zipFile):
     outputFilename = zipFile.split('/')[-1].split('.')[0] + '_powerBalancing.npz'
-    print(outputFilename)
+    print(outputPath + outputFilename)
     if os.path.exists(outputPath + outputFilename):
         print('Processed data file already exists.')
     else:
         Sentinel1Image(zipFile).experiment_powerBalancing('HV')
+        print('Done! Moving file to\n %s\%s\n' % (outputFilename, outputPath))
+        print('\n#### Moving file...\n')
         shutil.move(outputFilename, outputPath)
 
-zipFilesAll = sorted(glob.glob('%s/S1?_EW_GRDM_1SDH_*.zip' % (inputPath)), reverse=True)
 zipFilesUnprocessed = [z for z in zipFilesAll
     if not os.path.exists(outputPath + os.path.basename(z).split('.')[0] + '_powerBalancing.npz')]
 
