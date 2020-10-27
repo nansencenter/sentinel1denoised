@@ -1604,7 +1604,7 @@ class Sentinel1Image(Nansat):
 
     def qualityAssesment(self, polarization, num_px = 100):
         '''
-        Denoising quality assessment at the subswath margins by Fisher's criteria
+        Denoising quality assessment near subswath margins based on Fisher's criteria
 
         Parameters
         ----------
