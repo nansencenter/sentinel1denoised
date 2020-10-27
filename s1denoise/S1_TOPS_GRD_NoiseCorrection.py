@@ -1590,8 +1590,8 @@ class Sentinel1Image(Nansat):
 
         return s0o
 
-    def get_s0_nesz(self, polarization):
-        """ Get Sigma0, and noise substracted Sigma0 (ESA/NERSC) """
+    def getS0Nesz(self, polarization):
+        """ Get matrices with Sigma0, and noise substracted Sigma0 (ESA/NERSC) """
         results = {}
         results['src'] = self.path
         results['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
@@ -1602,7 +1602,7 @@ class Sentinel1Image(Nansat):
         results['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
         return results
 
-    def quality_assesment(self, polarization, num_px = 100):
+    def qualityAssesment(self, polarization, num_px = 100):
         '''
         Denoising quality assessment at the subswath margins by Fisher's criteria
 
@@ -1624,7 +1624,7 @@ class Sentinel1Image(Nansat):
         swath_bounds = self.import_swathBounds(polarization)
 
         # get denoise results (s0-nesz)
-        res = self.get_s0_nesz(polarization)
+        res = self.getS0Nesz(polarization)
 
         s0_hv_esa = res['sz'] - res['nesz_esa']
         s0_hv_nersc = res['sz'] - res['nesz_nersc']
