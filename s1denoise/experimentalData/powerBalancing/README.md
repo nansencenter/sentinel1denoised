@@ -10,7 +10,7 @@ run analyze_experiment_powerBalancingParameters.py S1A /path/to/training/files /
 where arguments:\
 1st - platform (S1A/S1B)\
 2nd - path to input training Level-1 GRD data\
-3d  - path to output files with individual statistics\
+3d  - path to output files with individual statistics
 
 ##2nd stage. Aggregated statistics processing
 
@@ -24,7 +24,7 @@ where arguments:\
 2nd - mode (EW/IW)\
 3d  - polarization mode (1SDH/1SDV)\
 4th - path to input training npz files from the first step\
-5th - path to output dir\
+5th - path to output dir
 
 All steps are described in a Python's notebook in line by line manner:
 
