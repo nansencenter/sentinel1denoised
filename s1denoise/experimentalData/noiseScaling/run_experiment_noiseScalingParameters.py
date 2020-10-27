@@ -9,15 +9,17 @@ from sys import exit
 # Instrument
 instr = sys.argv[1]
 
+polarization = sys.argv[2]
+
 if not instr in ['S1A', 'S1B']:
     print('The input data must be S1A or S1B')
     exit()
 
 # Input directory with S1 files
-inputPath = sys.argv[2]  #'/mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip
+inputPath = sys.argv[3]  #'/mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip
 
 # Output directory for storing statistics for individual files
-outputPath = sys.argv[3] #'/mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/noise_scaling'
+outputPath = sys.argv[4] #'/mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/noise_scaling'
 
 zipFilesAll = []
 
@@ -37,7 +39,7 @@ def run_process(zipFile):
     if os.path.exists(outputPath + outputFilename):
         print('Processed data file already exists.')
     else:
-        Sentinel1Image(zipFile).experiment_noiseScaling('HV')
+        Sentinel1Image(zipFile).experiment_noiseScaling(polarization)
         shutil.move(outputFilename, outputPath)
 
 zipFilesUnprocessed = [z for z in zipFilesAll
