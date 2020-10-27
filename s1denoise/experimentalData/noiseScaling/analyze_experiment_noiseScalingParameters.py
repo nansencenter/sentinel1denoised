@@ -7,6 +7,7 @@ import sys
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from sys import exit
 
 # Instrument
 platform = sys.argv[1]
