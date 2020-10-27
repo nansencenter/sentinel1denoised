@@ -6,6 +6,9 @@ from multiprocessing import Pool
 from s1denoise import Sentinel1Image
 from sys import exit
 
+# run example:
+# run run_experiment_powerBalancingParameters.py S1A /mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip /mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing
+
 # Instrument
 instrument = sys.argv[1]
 
