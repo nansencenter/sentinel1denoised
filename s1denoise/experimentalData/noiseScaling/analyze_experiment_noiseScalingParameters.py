@@ -233,7 +233,7 @@ for i in range(1, num_ss[mode] + 1):
     ss = '%s%d' % (mode, i)
     for item in noiseScalingParameters[ss].items():
         ipf_ver = item[0]
-        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1['HV']['noiseScalingParameters'][ss][ipf_ver]))
+        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[grd_mode]]['noiseScalingParameters'][ss][ipf_ver]))
 
 # save updated version
 np.savez(outfile_npz_file, **d_s1)
