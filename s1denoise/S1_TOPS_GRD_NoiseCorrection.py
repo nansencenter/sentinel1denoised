@@ -1591,7 +1591,7 @@ class Sentinel1Image(Nansat):
         return s0o
 
     def get_s0_nesz(self, polarization):
-        """ Get profiles of Sigma0 and NESZ """
+        """ Get Sigma0, and noise substracted Sigma0 (ESA/NERSC) """
         results = {}
         results['src'] = self.path
         results['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
@@ -1602,7 +1602,7 @@ class Sentinel1Image(Nansat):
         results['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
         return results
 
-    # !TODO: clean ugly code
+    # !TODO: clean code
     def plot_qa(self, nersc_data, esa_data):
         """ Plot quality assesment results """
 
@@ -1672,14 +1672,28 @@ class Sentinel1Image(Nansat):
             plt.savefig('qa_%s.png' % fig_name, bbox_inches='tight', dpi=300)
             plt.show()
 
-    def quality_assesment(self, polarization):
-        """
-        Denoising quality assessment at the subswath borders by Fisher's criteria
-        """
+    def quality_assesment(self, polarization, num_px = 100):
+        '''
+        Denoising quality assessment at the subswath margins by Fisher's criteria
+
+        Parameters
+        ----------
+        polarisation : str
+            'HH' or 'HV'
+
+        num_px : int
+            Size of window
+
+        Returns
+        -------
+        q_ll_nersc_ss : list
+        q_ll_esa_ss : list
+            Lists with a mean values of quality metric values at sub-swath margins aberaged for bursts
+        '''
 
         swath_bounds = self.import_swathBounds(polarization)
 
-        # denoise results (s0-nesz)
+        # get denoise results (s0-nesz)
         res = self.get_s0_nesz(polarization)
 
         s0_hv_esa = res['sz'] - res['nesz_esa']
@@ -1689,12 +1703,12 @@ class Sentinel1Image(Nansat):
         q_ll_nersc = []
         q_ll_esa = []
 
-        # mean for bursts within subswath
+        # mean for all bursts in sub-swath
         q_ll_nersc_ss = []
         q_ll_esa_ss = []
 
         print('\nDenoise evaluation...\n')
-        for li in range(1, {'IW': 3, 'EW': 5}[n.obsMode]):
+        for li in range(1, {'IW': 3, 'EW': 5}[self.obsMode]):
             print('\n\n%s%s-%s%s' % (self.obsMode, li, self.obsMode, li+1))
             subswath_name = '%s%s' % (self.obsMode, li)
             # globals()[var_name] = var_name
@@ -1704,14 +1718,10 @@ class Sentinel1Image(Nansat):
             q_temp_esa = []
 
             for i in range(len(swath_bounds[subswath_name]['firstAzimuthLine'])):
-
-
                 middle_az = round((swath_bounds[subswath_name]['firstAzimuthLine'][i]-\
                             swath_bounds[subswath_name]['lastAzimuthLine'][i])/2)
 
-                num_px = 100
-
-                # NERSC
+                # NERSC denoise assesment
                 # First burst patch
                 s0_01 = s0_hv_nersc[middle_az - num_px:middle_az + num_px,
                         swath_bounds[subswath_name]['lastRangeSample'][i] - num_px:
@@ -1724,7 +1734,7 @@ class Sentinel1Image(Nansat):
                         swath_bounds[subswath_name]['lastRangeSample'][i] + num_px]
                 s0_02_std = np.nanstd(s0_02)
 
-                # ESA
+                # ESA denoise assesment
                 s0_01_esa = s0_hv_esa[middle_az - num_px:middle_az + num_px,
                             swath_bounds[subswath_name]['lastRangeSample'][i] - num_px:
                             swath_bounds[subswath_name]['lastRangeSample'][i]]
@@ -1749,7 +1759,7 @@ class Sentinel1Image(Nansat):
             q_ll_nersc_ss.append(np.nanmean(q_temp_nersc))
             q_ll_esa_ss.append(np.nanmean(q_temp_esa))
 
-        print('\nMean quality assesment NERSC: %s\n' % np.nanmean(q_ll_nersc))
+        print('\nMean quality assesment NERSC: %s' % np.nanmean(q_ll_nersc))
         print('Mean quality assesment ESA: %s\n' % np.nanmean(q_ll_esa))
 
         return q_ll_nersc_ss, q_ll_esa_ss
