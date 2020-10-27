@@ -8,7 +8,13 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+# Instrument
+platform = sys.argv[1]
+
 # Mode
+mode = sys.argv[2]
+
+# GRD Mode
 grd_mode = sys.argv[3]
 
 # Polarization file prefix
