@@ -9,6 +9,9 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sys import exit
 
+# run example:
+# run analyze_experiment_noiseScalingParameters.py IW GRDH 1SDV /path/to/npz /path/to/output/file
+
 # Instrument
 platform = sys.argv[1]
 
@@ -133,7 +136,7 @@ noiseScalingParameters = {'%s%s' % (mode, li): {} for li in range(1,{'IW':4, 'EW
 noiseScalingParametersRMSE = {'%s%s' % (mode, li): {} for li in range(1,{'IW':4, 'EW':6}[mode])}
 
 for IPFv in np.arange(2.4, 4.0, 0.1):
-    for iSW in range(1,{'IW':4, 'EW':6}[s1.obsMode]):
+    for iSW in range(1,{'IW':4, 'EW':6}[mode]):
         if IPFv==2.7 and platform=='S1B':
             valid = np.logical_and(np.array(IPFversion['%s%s' % (mode, iSW)])==2.72,
                                    np.array(acqDate['%s%s' % (mode, iSW)]) < datetime.datetime(2017,1,16,13,42,34) )
@@ -194,7 +197,6 @@ plt.tight_layout()
 plt.savefig('%s/%s_%s_scale_noise.png' % (out_path, platform, mode), bbox_inches='tight', dpi=600)
 
 # if update_npz_files
-num_ss = {'EW': 5, 'IW': 3}
 
 if update_npz_files:
     print('\ngoing to update coefficients for the noise scaling...')
@@ -217,7 +219,7 @@ if update_npz_files:
     print('\nnew obtained coefficients')
 
     # loop over each mode and each IPF
-    for i in range(1, num_ss[mode] + 1):
+    for i in range(1, ({'EW': 5, 'IW': 3}[mode]) + 1):
         ss = '%s%d' % (mode, i)
 
         for item in noiseScalingParameters[ss].items():
@@ -225,22 +227,22 @@ if update_npz_files:
 
             # try replace existing value
             try:
-                d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[grd_mode]]['noiseScalingParameters'][ss][ipf_ver] = \
+                d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[pol_mode]]['noiseScalingParameters'][ss][ipf_ver] = \
                     noiseScalingParameters[ss][ipf_ver]
-                print('adding new record %s (IPF: %s)...' % (ss, ipf_ver))
+                print('success adding new record %s (IPF: %s)...' % (ss, ipf_ver))
             except:
                 # make a new record
-                print('adding new record %s (IPF: %s)...' % (ss, ipf_ver))
-                d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[grd_mode]]['noiseScalingParameters'].update(
+                print('trying adding new record %s (IPF: %s)...' % (ss, ipf_ver))
+                d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[pol_mode]]['noiseScalingParameters'].update(
                     {ss: {ipf_ver: noiseScalingParameters[ss][ipf_ver]}}
                 )
 
 print('\nPrinting updated coefficients for double check:')
-for i in range(1, num_ss[mode] + 1):
+for i in range(1, ({'EW': 5, 'IW': 3}[mode]) + 1):
     ss = '%s%d' % (mode, i)
     for item in noiseScalingParameters[ss].items():
         ipf_ver = item[0]
-        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[grd_mode]]['noiseScalingParameters'][ss][ipf_ver]))
+        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[pol_mode]]['noiseScalingParameters'][ss][ipf_ver]))
 
 # save updated version
 np.savez(outfile_npz_file, **d_s1)

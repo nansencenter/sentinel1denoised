@@ -9,6 +9,7 @@ from sys import exit
 # Instrument
 instr = sys.argv[1]
 
+# Polarization
 polarization = sys.argv[2]
 
 if not instr in ['S1A', 'S1B']:
