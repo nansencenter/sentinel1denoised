@@ -8,6 +8,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sys import exit
+from collections import defaultdict
 
 #########################################################################################################
 # run example:
@@ -27,7 +28,8 @@ from sys import exit
 platform = sys.argv[1]
 
 # 1st define path to your local existing file with coefficients that is suppose to be the basis for the updated file in output dir
-path_to_coefficients_npz = os.path.join(os.path.dirname(os.path.realpath(__file__))
+#path_to_coefficients_npz = os.path.join(os.path.dirname(os.path.realpath(__file__))
+path_to_coefficients_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_S1A.npz'
 
 # Mode
 mode = sys.argv[2]
@@ -48,10 +50,9 @@ out_path = sys.argv[6]
 update_npz_files = True
 
 # dicts with sub-swaths number and polarization
-swaths_number = {'IW': 3, 'EW': 4}
-swath_names = ['%s%s' % (mode,iSW) for iSW in range(1,swaths_number[mode]+1)]
-
-polarisation = {'1SDH':'HV', '1SDV':'VH'}
+swaths_number = {'IW': 3, 'EW': 4}[mode]
+swath_names = ['%s%s' % (mode,iSW) for iSW in range(1,swaths_number+1)]
+polarisation = {'1SDH':'HV', '1SDV':'VH'}[pol_mode]
 
 if not platform in ['S1A', 'S1B']:
     print('The input data must be S1A or S1B')
@@ -89,12 +90,12 @@ for li, npzFile in enumerate(npzFilesAll):
         npzFiles.append(npzFile)
 
 # stack processed files
-IPFversion = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
-powerDifference = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
-scalingFactor = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
-correlationCoefficient = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
-fitResidual = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
-acqDate = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
+IPFversion = {'%s' % li: [] for li in swath_names}
+powerDifference = {'%s' % li: [] for li in swath_names}
+scalingFactor = {'%s' % li: [] for li in swath_names}
+correlationCoefficient = {'%s' % li: [] for li in swath_names}
+fitResidual = {'%s' % li: [] for li in swath_names}
+acqDate = {'%s' % li: [] for li in swath_names}
 
 for npzFile in npzFiles:
     print('importing %s' % npzFile)
@@ -120,39 +121,9 @@ for npzFile in npzFiles:
         dummy = [ acqDate[iSW].append(datetime.datetime.strptime(os.path.basename(npzFile).split('_')[4], '%Y%m%dT%H%M%S'))
                   for li in range(numberOfSubblocks) ]
 
-'''
-# compute mean values
-thres = 20
-noiseScalingParameters = {'EW%s' % li: {} for li in range(1,6)}
-noiseScalingParametersRMSE = {'EW%s' % li: {} for li in range(1,6)}
-for IPFv in np.arange(2.4, 4.0, 0.1):
-    for iSW in range(1,6):
-        if IPFv==2.7 and platform=='S1B':
-            valid = np.logical_and(np.array(IPFversion['EW%s' % iSW])==2.72,
-                                   np.array(acqDate['EW%s' % iSW]) < datetime.datetime(2017,1,16,13,42,34) )
-        else:
-            valid = np.isclose((np.trunc(np.array(IPFversion['EW%s' % iSW])*10)/10.), IPFv, atol=0.01)
-        if valid.sum()==0:
-            continue
-        pd = np.hstack(powerDifference['EW%s' % iSW])[valid]
-        sf = np.hstack(scalingFactor['EW%s' % iSW])[valid]
-        cc = np.hstack(correlationCoefficient['EW%s' % iSW])[valid]
-        fr = np.hstack(fitResidual['EW%s' % iSW])[valid]
-        #goodSamples = (pd <= 2) * (cc >= 0.9) * (fr <= 5e-16)
-        goodSamples = (   (pd <= np.percentile(pd[np.isfinite(pd)],thres))
-                        * (cc >= np.percentile(cc[np.isfinite(cc)],100-thres))
-                        * (fr <= np.percentile(fr[np.isfinite(fr)],thres)) )
-        print('%s: %d / %d' % (IPFv, goodSamples.sum(), len(goodSamples)))
-        noiseScalingParameters['EW%s' % iSW]['%.1f' % IPFv] = np.nanmean(sf[goodSamples])
-        noiseScalingParametersRMSE['EW%s' % iSW]['%.1f' % IPFv] = np.sqrt(np.sum((np.nanmean(sf[goodSamples])-sf[goodSamples])**2) / goodSamples.sum())
-'''
-#plt.clf()
-#plt.figure(figsize=(15,4))
-
-
 # compute fit values
-noiseScalingParameters = {'%s%s' % (mode, li): {} for li in range(1,swaths_number[mode]+1)}
-noiseScalingParametersRMSE = {'%s%s' % (mode, li): {} for li in range(1,swaths_number[mode]+1)}
+noiseScalingParameters = {'%s' % li: {} for li in swath_names}
+noiseScalingParametersRMSE = {'%s' % li: {} for li in swath_names}
 
 for IPFv in np.arange(2.4, 4.0, 0.1):
     for iSW in swath_names:
@@ -205,19 +176,6 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
         fitResults = np.polyfit(pd, sf, deg=0, w=w)
         print(fitResults[0])
 
-        #plt.subplot(1,5,iSW); plt.hold(0)
-        #plt.hist2d(sf,pd,bins=100,cmin=1,range=[[0,3],[-5,15]])
-        #plt.hold(1)
-
-        #plt.plot(np.polyval(fitResults, np.linspace(-5,+15,2)), np.linspace(-5,+15,2), linewidth=0.5, color='r')
-        #plt.plot([0,3],[0,0], linewidth=0.5, color='k')
-
-# Save a figure with statistics on noise scaling
-#plt.tight_layout()
-#plt.savefig('%s/%s_%s_scale_noise.png' % (out_path, platform, mode), bbox_inches='tight', dpi=600)
-
-# if update_npz_files
-
 if update_npz_files:
     print('\ngoing to update coefficients for the noise scaling...')
     data = np.load(path_to_coefficients_npz)
@@ -226,32 +184,23 @@ if update_npz_files:
     # Restore dictonaries for the data
     d_s1 = {key: data[key].item() for key in data}
 
-    '''
-    print('\nold coefficients:')
-    try:
-        for i in range(1,num_ss[mode]+1):
-            ss = '%s%d' % (mode, i)
-            print(ss, d_s1['HV']['noiseScalingParameters'][ss][str(npz['IPFversion'])])
-    except:
-        print('\nNo old coefficients\n')
-    '''
-
     print('\nnew obtained coefficients')
 
     # loop over each mode and each IPF
     for ss in swath_names:
         for item in noiseScalingParameters[ss].items():
             ipf_ver = item[0]
+            print(ipf_ver)
 
             # try replace existing value
             try:
-                d_s1['%s' % polarisation[pol_mode]]['noiseScalingParameters'][ss][ipf_ver] = \
+                d_s1['%s' % polarisation]['noiseScalingParameters'][ss][ipf_ver] = \
                     noiseScalingParameters[ss][ipf_ver]
                 print('success adding new record %s (IPF: %s)...' % (ss, ipf_ver))
             except:
                 # make a new record
                 print('trying adding new record %s (IPF: %s)...' % (ss, ipf_ver))
-                d_s1['%s' % polarisation[pol_mode]]['noiseScalingParameters'].update(
+                d_s1['%s' % polarisation]['noiseScalingParameters'].update(
                     {ss: {ipf_ver: noiseScalingParameters[ss][ipf_ver]}}
                 )
 
@@ -259,7 +208,7 @@ print('\nPrinting updated coefficients for double check:')
 for ss in swath_names:
     for item in noiseScalingParameters[ss].items():
         ipf_ver = item[0]
-        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1[polarisation[pol_mode]]['noiseScalingParameters'][ss][ipf_ver]))
+        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1[polarisation]['noiseScalingParameters'][ss][ipf_ver]))
 
 # save updated version
 np.savez(outfile_npz_file, **d_s1)
