@@ -47,7 +47,9 @@ out_path = sys.argv[6]
 # flag to update npz file with coefficients
 update_npz_files = True
 
+# dicts with sub-swaths number and polarization
 swaths_number = {'IW':3, 'EW':5}
+polarisation = {'1SDH':'HV', '1SDV':'VH'}
 
 if not platform in ['S1A', 'S1B']:
     print('The input data must be S1A or S1B')
@@ -85,19 +87,19 @@ for li, npzFile in enumerate(npzFilesAll):
         npzFiles.append(npzFile)
 
 # stack processed files
-IPFversion = {'%s%s' % (mode,li): [] for li in range(1,{'IW':4, 'EW':6}[mode])}
-powerDifference = {'%s%s' % (mode,li): [] for li in range(1,{'IW':4, 'EW':6}[mode])}
-scalingFactor = {'%s%s' % (mode,li): [] for li in range(1,{'IW':4, 'EW':6}[mode])}
-correlationCoefficient = {'%s%s' % (mode,li): [] for li in range(1,{'IW':4, 'EW':6}[mode])}
-fitResidual = {'%s%s' % (mode,li): [] for li in range(1,{'IW':4, 'EW':6}[mode])}
-acqDate = {'%s%s' % (mode,li): [] for li in range(1,{'IW':4, 'EW':6}[mode])}
+IPFversion = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
+powerDifference = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
+scalingFactor = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
+correlationCoefficient = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
+fitResidual = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
+acqDate = {'%s%s' % (mode,li): [] for li in range(1,swaths_number[mode]+1)}
 
 for npzFile in npzFiles:
     print('importing %s' % npzFile)
     npz = np.load(npzFile)
     npz.allow_pickle=True
 
-    for iSW in range(1,{'IW':4, 'EW':6}[mode]):
+    for iSW in range(1,swaths_number[mode]+1):
         numberOfSubblocks = np.unique([
             len(npz['%s%s' % (mode,iSW)].item()[key])
             for key in ['scalingFactor', 'correlationCoefficient', 'fitResidual'] ])
@@ -242,13 +244,13 @@ if update_npz_files:
 
             # try replace existing value
             try:
-                d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[pol_mode]]['noiseScalingParameters'][ss][ipf_ver] = \
+                d_s1['%s' % polarisation[pol_mode]]['noiseScalingParameters'][ss][ipf_ver] = \
                     noiseScalingParameters[ss][ipf_ver]
                 print('success adding new record %s (IPF: %s)...' % (ss, ipf_ver))
             except:
                 # make a new record
                 print('trying adding new record %s (IPF: %s)...' % (ss, ipf_ver))
-                d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[pol_mode]]['noiseScalingParameters'].update(
+                d_s1['%s' % polarisation[pol_mode]]['noiseScalingParameters'].update(
                     {ss: {ipf_ver: noiseScalingParameters[ss][ipf_ver]}}
                 )
 
@@ -257,7 +259,7 @@ for i in range(1, ({'EW': 5, 'IW': 3}[mode]) + 1):
     ss = '%s%d' % (mode, i)
     for item in noiseScalingParameters[ss].items():
         ipf_ver = item[0]
-        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[pol_mode]]['noiseScalingParameters'][ss][ipf_ver]))
+        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1['%s' % polarisation[pol_mode]]['noiseScalingParameters'][ss][ipf_ver]))
 
 # save updated version
 np.savez(outfile_npz_file, **d_s1)
