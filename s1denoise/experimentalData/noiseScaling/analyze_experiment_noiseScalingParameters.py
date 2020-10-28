@@ -23,11 +23,11 @@ from sys import exit
 # variable called 'path_to_coefficients_npz'
 #########################################################################################################
 
-# 1st define path to your local existing file with coefficients that is suppose to be the basis for the updated file in output dir
-path_to_coefficients_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_%s.npz' % platform
-
 # Instrument
 platform = sys.argv[1]
+
+# 1st define path to your local existing file with coefficients that is suppose to be the basis for the updated file in output dir
+path_to_coefficients_npz = os.path.join(os.path.dirname(os.path.realpath(__file__))
 
 # Mode
 mode = sys.argv[2]
