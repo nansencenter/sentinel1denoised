@@ -9,8 +9,22 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from sys import exit
 
+#########################################################################################################
 # run example:
 # run analyze_experiment_noiseScalingParameters.py IW GRDH 1SDV /path/to/npz /path/to/output/file
+#
+# '/path/to/output/file' is a resultant file with updated/replaced coefficients for noise scaling
+# which you can replace the old one
+#
+# Output file name will be as following: 'ns_MODE_GRD-MODE_denoising_parameters_PLATFORM.npz' and
+# contains coefficients for previous IPF versions and modes plus updated data
+#
+# It is important to define a correct path to your existing npz file with coefficients in
+# variable called 'path_to_coefficients_npz'
+#########################################################################################################
+
+# 1st define path to your local existing file with coefficients that is suppose to be the basis for the updated file in output dir
+path_to_coefficients_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_%s.npz' % platform
 
 # Instrument
 platform = sys.argv[1]
@@ -46,7 +60,6 @@ if not grd_mode in ['GRDM', 'GRDH']:
     exit()
 
 if update_npz_files:
-    path_to_trained_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_%s.npz' % platform
     outfile_npz_file = '%s/ns_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
 
 npzFilesAll = sorted(glob.glob('%s/%s_%s_%s_%s_*_noiseScaling.npz' % (in_path, platform,
@@ -200,7 +213,7 @@ plt.savefig('%s/%s_%s_scale_noise.png' % (out_path, platform, mode), bbox_inches
 
 if update_npz_files:
     print('\ngoing to update coefficients for the noise scaling...')
-    data = np.load(path_to_trained_npz)
+    data = np.load(path_to_coefficients_npz)
     data.allow_pickle = True
 
     # Restore dictonaries for the data
