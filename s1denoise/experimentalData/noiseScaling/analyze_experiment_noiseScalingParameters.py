@@ -47,6 +47,8 @@ out_path = sys.argv[6]
 # flag to update npz file with coefficients
 update_npz_files = True
 
+swaths_number = {'IW':3, 'EW':5}
+
 if not platform in ['S1A', 'S1B']:
     print('The input data must be S1A or S1B')
     exit()
@@ -145,11 +147,11 @@ plt.clf()
 plt.figure(figsize=(15,4))
 
 # compute fit values
-noiseScalingParameters = {'%s%s' % (mode, li): {} for li in range(1,{'IW':4, 'EW':6}[mode])}
-noiseScalingParametersRMSE = {'%s%s' % (mode, li): {} for li in range(1,{'IW':4, 'EW':6}[mode])}
+noiseScalingParameters = {'%s%s' % (mode, li): {} for li in range(1,swaths_number[mode]+1)}
+noiseScalingParametersRMSE = {'%s%s' % (mode, li): {} for li in range(1,swaths_number[mode]+1)}
 
 for IPFv in np.arange(2.4, 4.0, 0.1):
-    for iSW in range(1,{'IW':4, 'EW':6}[mode]):
+    for iSW in range(1,swaths_number[mode]+1):
         if IPFv==2.7 and platform=='S1B':
             valid = np.logical_and(np.array(IPFversion['%s%s' % (mode, iSW)])==2.72,
                                    np.array(acqDate['%s%s' % (mode, iSW)]) < datetime.datetime(2017,1,16,13,42,34) )
@@ -179,7 +181,7 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
         noiseScalingParametersRMSE['%s%s' % (mode,iSW)]['%.1f' % IPFv] = np.sqrt(np.sum((fitResults[0]-sf)**2 * w) / np.sum(w))
 
     # Plot data distribution
-    for iSW in range(1,{'IW':4, 'EW':6}[mode]):
+    for iSW in range(1,swaths_number[mode]+1):
         if IPFv==2.7 and platform=='S1B':
             valid = np.logical_and(np.array(IPFversion['%s%s' % (mode, iSW)])==2.72,
                                    np.array(acqDate['%s%s' % (mode, iSW)]) < datetime.datetime(2017,1,16,13,42,34) )
