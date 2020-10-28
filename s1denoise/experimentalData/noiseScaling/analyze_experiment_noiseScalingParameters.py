@@ -48,7 +48,9 @@ out_path = sys.argv[6]
 update_npz_files = True
 
 # dicts with sub-swaths number and polarization
-swaths_number = {'IW':3, 'EW':5}
+swaths_number = {'IW': 3, 'EW': 4}
+swath_names = ['%s%s' % (mode,iSW) for iSW in range(1,swaths_number[mode]+1)]
+
 polarisation = {'1SDH':'HV', '1SDV':'VH'}
 
 if not platform in ['S1A', 'S1B']:
@@ -99,23 +101,23 @@ for npzFile in npzFiles:
     npz = np.load(npzFile)
     npz.allow_pickle=True
 
-    for iSW in range(1,swaths_number[mode]+1):
+    for iSW in swath_names:
         numberOfSubblocks = np.unique([
-            len(npz['%s%s' % (mode,iSW)].item()[key])
+            len(npz[iSW].item()[key])
             for key in ['scalingFactor', 'correlationCoefficient', 'fitResidual'] ])
         if numberOfSubblocks.size != 1:
             print('*** numberOfSubblocks are not consistent for all estimations.')
             continue
         numberOfSubblocks = numberOfSubblocks.item()
-        powerDifference['%s%s' % (mode,iSW)].append([
-              np.nanmean(10*np.log10(npz['%s%s' % (mode,iSW)].item()['sigma0'][li]))
-            - np.nanmean(10*np.log10(npz['%s%s' % (mode,iSW)].item()['noiseEquivalentSigma0'][li]))
+        powerDifference[iSW].append([
+              np.nanmean(10*np.log10(npz[iSW].item()['sigma0'][li]))
+            - np.nanmean(10*np.log10(npz[iSW].item()['noiseEquivalentSigma0'][li]))
             for li in range(numberOfSubblocks) ])
-        scalingFactor['%s%s' % (mode,iSW)].append(npz['%s%s' % (mode,iSW)].item()['scalingFactor'])
-        correlationCoefficient['%s%s' % (mode,iSW)].append(npz['%s%s' % (mode,iSW)].item()['correlationCoefficient'])
-        fitResidual['%s%s' % (mode,iSW)].append(npz['%s%s' % (mode,iSW)].item()['fitResidual'])
-        dummy = [ IPFversion['%s%s' % (mode,iSW)].append(npz['IPFversion']) for li in range(numberOfSubblocks)]
-        dummy = [ acqDate['%s%s' % (mode,iSW)].append(datetime.datetime.strptime(os.path.basename(npzFile).split('_')[4], '%Y%m%dT%H%M%S'))
+        scalingFactor[iSW].append(npz[iSW].item()['scalingFactor'])
+        correlationCoefficient[iSW].append(npz[iSW].item()['correlationCoefficient'])
+        fitResidual[iSW].append(npz[iSW].item()['fitResidual'])
+        dummy = [ IPFversion[iSW].append(npz['IPFversion']) for li in range(numberOfSubblocks)]
+        dummy = [ acqDate[iSW].append(datetime.datetime.strptime(os.path.basename(npzFile).split('_')[4], '%Y%m%dT%H%M%S'))
                   for li in range(numberOfSubblocks) ]
 
 '''
@@ -144,28 +146,28 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
         noiseScalingParameters['EW%s' % iSW]['%.1f' % IPFv] = np.nanmean(sf[goodSamples])
         noiseScalingParametersRMSE['EW%s' % iSW]['%.1f' % IPFv] = np.sqrt(np.sum((np.nanmean(sf[goodSamples])-sf[goodSamples])**2) / goodSamples.sum())
 '''
+#plt.clf()
+#plt.figure(figsize=(15,4))
 
-plt.clf()
-plt.figure(figsize=(15,4))
 
 # compute fit values
 noiseScalingParameters = {'%s%s' % (mode, li): {} for li in range(1,swaths_number[mode]+1)}
 noiseScalingParametersRMSE = {'%s%s' % (mode, li): {} for li in range(1,swaths_number[mode]+1)}
 
 for IPFv in np.arange(2.4, 4.0, 0.1):
-    for iSW in range(1,swaths_number[mode]+1):
+    for iSW in swath_names:
         if IPFv==2.7 and platform=='S1B':
             valid = np.logical_and(np.array(IPFversion['%s%s' % (mode, iSW)])==2.72,
                                    np.array(acqDate['%s%s' % (mode, iSW)]) < datetime.datetime(2017,1,16,13,42,34) )
         else:
-            valid = np.isclose((np.trunc(np.array(IPFversion['%s%s' % (mode, iSW)])*10)/10.), IPFv, atol=0.01)
+            valid = np.isclose((np.trunc(np.array(IPFversion[iSW])*10)/10.), IPFv, atol=0.01)
         if valid.sum()==0:
             continue
 
-        pd = np.hstack(powerDifference['%s%s' % (mode,iSW)])[valid]
-        sf = np.hstack(scalingFactor['%s%s' % (mode,iSW)])[valid]
-        cc = np.hstack(correlationCoefficient['%s%s' % (mode,iSW)])[valid]
-        fr = np.hstack(fitResidual['%s%s' % (mode,iSW)])[valid]
+        pd = np.hstack(powerDifference[iSW])[valid]
+        sf = np.hstack(scalingFactor[iSW])[valid]
+        cc = np.hstack(correlationCoefficient[iSW])[valid]
+        fr = np.hstack(fitResidual[iSW])[valid]
 
         # weight for fitting: higher weights for high correlation and low RMSE from K-fitting
         w = cc / fr
@@ -179,39 +181,40 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
         fitResults = np.polyfit(pd, sf, deg=0, w=w)
 
         # Results
-        noiseScalingParameters['%s%s' % (mode,iSW)]['%.1f' % IPFv] = fitResults[0]
-        noiseScalingParametersRMSE['%s%s' % (mode,iSW)]['%.1f' % IPFv] = np.sqrt(np.sum((fitResults[0]-sf)**2 * w) / np.sum(w))
+        noiseScalingParameters[iSW]['%.1f' % IPFv] = fitResults[0]
+        noiseScalingParametersRMSE[iSW]['%.1f' % IPFv] = np.sqrt(np.sum((fitResults[0]-sf)**2 * w) / np.sum(w))
 
     # Plot data distribution
-    for iSW in range(1,swaths_number[mode]+1):
+    for iSW in swath_names:
         if IPFv==2.7 and platform=='S1B':
-            valid = np.logical_and(np.array(IPFversion['%s%s' % (mode, iSW)])==2.72,
-                                   np.array(acqDate['%s%s' % (mode, iSW)]) < datetime.datetime(2017,1,16,13,42,34) )
+            valid = np.logical_and(np.array(IPFversion[iSW])==2.72,
+                                   np.array(acqDate[iSW]) < datetime.datetime(2017,1,16,13,42,34) )
         else:
-            valid = np.isclose((np.trunc(np.array(IPFversion['%s%s' % (mode, iSW)])*10)/10.), IPFv, atol=0.01)
+            valid = np.isclose((np.trunc(np.array(IPFversion[iSW])*10)/10.), IPFv, atol=0.01)
 
         if valid.sum()==0:
             continue
 
-        pd = np.hstack(powerDifference['%s%s' % (mode, iSW)])[valid]
+        pd = np.hstack(powerDifference[iSW])[valid]
         print(pd)
-        sf = np.hstack(scalingFactor['%s%s' % (mode, iSW)])[valid]
-        cc = np.hstack(correlationCoefficient['%s%s' % (mode, iSW)])[valid]
-        fr = np.hstack(fitResidual['%s%s' % (mode, iSW)])[valid]
+        sf = np.hstack(scalingFactor[iSW])[valid]
+        cc = np.hstack(correlationCoefficient[iSW])[valid]
+        fr = np.hstack(fitResidual[iSW])[valid]
         w = cc / fr
 
         fitResults = np.polyfit(pd, sf, deg=0, w=w)
         print(fitResults[0])
-        plt.subplot(1,5,iSW); plt.hold(0)
-        plt.hist2d(sf,pd,bins=100,cmin=1,range=[[0,3],[-5,15]])
-        plt.hold(1)
 
-        plt.plot(np.polyval(fitResults, np.linspace(-5,+15,2)), np.linspace(-5,+15,2), linewidth=0.5, color='r')
-        plt.plot([0,3],[0,0], linewidth=0.5, color='k')
+        #plt.subplot(1,5,iSW); plt.hold(0)
+        #plt.hist2d(sf,pd,bins=100,cmin=1,range=[[0,3],[-5,15]])
+        #plt.hold(1)
+
+        #plt.plot(np.polyval(fitResults, np.linspace(-5,+15,2)), np.linspace(-5,+15,2), linewidth=0.5, color='r')
+        #plt.plot([0,3],[0,0], linewidth=0.5, color='k')
 
 # Save a figure with statistics on noise scaling
-plt.tight_layout()
-plt.savefig('%s/%s_%s_scale_noise.png' % (out_path, platform, mode), bbox_inches='tight', dpi=600)
+#plt.tight_layout()
+#plt.savefig('%s/%s_%s_scale_noise.png' % (out_path, platform, mode), bbox_inches='tight', dpi=600)
 
 # if update_npz_files
 
@@ -236,9 +239,7 @@ if update_npz_files:
     print('\nnew obtained coefficients')
 
     # loop over each mode and each IPF
-    for i in range(1, ({'EW': 5, 'IW': 3}[mode]) + 1):
-        ss = '%s%d' % (mode, i)
-
+    for ss in swath_names:
         for item in noiseScalingParameters[ss].items():
             ipf_ver = item[0]
 
@@ -255,11 +256,10 @@ if update_npz_files:
                 )
 
 print('\nPrinting updated coefficients for double check:')
-for i in range(1, ({'EW': 5, 'IW': 3}[mode]) + 1):
-    ss = '%s%d' % (mode, i)
+for ss in swath_names:
     for item in noiseScalingParameters[ss].items():
         ipf_ver = item[0]
-        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1['%s' % polarisation[pol_mode]]['noiseScalingParameters'][ss][ipf_ver]))
+        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1[polarisation[pol_mode]]['noiseScalingParameters'][ss][ipf_ver]))
 
 # save updated version
 np.savez(outfile_npz_file, **d_s1)
