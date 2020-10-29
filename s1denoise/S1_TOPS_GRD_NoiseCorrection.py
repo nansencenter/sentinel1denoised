@@ -13,15 +13,16 @@
 #     Park et al., 2019, IEEE TGRS 57(6):4040-4049. doi:10.1109/TGRS.2018.2889381
 
 
-import os, sys, glob, warnings, zipfile, requests, subprocess
-import numpy as np
+import os, glob, warnings, zipfile, requests, subprocess
+from collections import defaultdict
 from datetime import datetime, timedelta
 from xml.dom.minidom import parse, parseString
+
+from nansat import Nansat
+import numpy as np
 from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
 from scipy.ndimage import convolve, uniform_filter, gaussian_filter
 from scipy.optimize import fminbound
-
-from nansat import Nansat
 
 warnings.simplefilter("ignore")
 
@@ -1287,6 +1288,10 @@ class Sentinel1Image(Nansat):
         ''' Generate experimental data for interswath power balancing parameter optimization '''
         # see section III.C of the reference, R1.
         cPx = {'IW':100, 'EW':25}[self.obsMode]    # clip size of side pixels, 1km
+        num_swaths = {'IW':3, 'EW':5}[self.obsMode]
+        swath_ids = range(1, num_swaths+1)
+        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in swath_ids]
+
         subswathIndexMap = self.subswathIndexMap(polarization)
         landmask = self.landmask(skipGCP=4)
         sigma0 = self.rawSigma0Map(polarization)
@@ -1296,12 +1301,9 @@ class Sentinel1Image(Nansat):
         rawNoiseEquivalentSigma0 = noiseEquivalentSigma0.copy()
         noiseScalingParameters = self.import_denoisingCoefficients(polarization)[0]
 
-        # !TEMP
-        print('\nNOISE SCALING PARAMS: %s \n' % noiseScalingParameters)
-
-        for iSW in range(1, {'IW': 3, 'EW': 5}[self.obsMode]+1):
+        for iSW, swath_name in zip(swath_ids, swath_names):
             valid = (subswathIndexMap==iSW)
-            noiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
+            noiseEquivalentSigma0[valid] *= noiseScalingParameters[swath_name]
 
         validLineIndices = np.argwhere(
             np.sum(subswathIndexMap!=0,axis=1) == self.shape()[1])
@@ -1309,15 +1311,8 @@ class Sentinel1Image(Nansat):
         blockBounds = np.arange(validLineIndices.min(), validLineIndices.max(),
                                 numberOfLinesToAverage, dtype='uint')
 
-        results = { '%s%s' % (self.obsMode, li):
-                        { 'sigma0':[],
-                          'noiseEquivalentSigma0':[],
-                          'balancingPower':[],
-                          'correlationCoefficient':[],
-                          'fitResidual':[] }
-                    for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
+        results = {name: defaultdict(list) for name in swath_names }
         results['IPFversion'] = self.IPFversion
-
         print('\nresults IPFversion  = %s\n' % results['IPFversion'])
 
         for iBlk in range(len(blockBounds)-1):
@@ -1333,8 +1328,7 @@ class Sentinel1Image(Nansat):
 
             fitCoefficients = []
             # Loop over sub-blocks within a block (block divided by sub-swath parts)
-            for iSW in range(1, {'IW': 3, 'EW': 5}[self.obsMode]+1):
-                subswathID = '%s%s' % (self.obsMode, iSW)
+            for iSW, name in zip(swath_ids, swath_names):
                 pixelIndex = np.nonzero((blockSWI==iSW).sum(axis=0) * pixelValidity)[0][cPx:-cPx]
                 if pixelIndex.sum()==0:
                     continue
@@ -1343,17 +1337,17 @@ class Sentinel1Image(Nansat):
                 meanRN0 = np.nanmean(np.where(blockSWI==iSW, blockRN0, np.nan), axis=0)[pixelIndex]
                 fitResults = np.polyfit(pixelIndex, meanS0 - meanN0, deg=1, full=True)
                 fitCoefficients.append(fitResults[0])
-                results[subswathID]['sigma0'].append(meanS0)
-                results[subswathID]['noiseEquivalentSigma0'].append(meanRN0)
-                results[subswathID]['correlationCoefficient'].append(np.corrcoef(meanS0, meanN0)[0,1])
-                results[subswathID]['fitResidual'].append(fitResults[1].item())
-            balancingPower = np.zeros({'IW': 3, 'EW': 5}[self.obsMode])
+                results[name]['sigma0'].append(meanS0)
+                results[name]['noiseEquivalentSigma0'].append(meanRN0)
+                results[name]['correlationCoefficient'].append(np.corrcoef(meanS0, meanN0)[0,1])
+                results[name]['fitResidual'].append(fitResults[1].item())
+            balancingPower = np.zeros(num_swaths)
 
             # Loop over sub-swath margins within a block
             for li in range(len(self.import_swathBounds(polarization))-1):
                 # Calculate pixel coordinate of interswath boundaries
                 interswathBounds = (np.where(np.gradient(blockSWI, axis=1) == 0.5)[1]
-                                    .reshape(2 * numberOfLinesToAverage, 2)[li::4].mean())
+                                    .reshape((num_swaths-1) * numberOfLinesToAverage, 2)[li::4].mean())
                 # Compute power left to a boundary as slope*interswathBounds + residual coef.
                 power1 = fitCoefficients[li][0] * interswathBounds + fitCoefficients[li][1]
                 # Compute power right to a boundary as slope*interswathBounds + residual coef.
@@ -1361,7 +1355,7 @@ class Sentinel1Image(Nansat):
                 balancingPower[li+1] = power2 - power1
             balancingPower = np.cumsum(balancingPower)
 
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in swath_ids:
                 valid = (blockSWI==iSW)
                 blockN0[valid] += balancingPower[iSW-1]
             #powerBias = np.nanmean(blockRN0-blockN0)
@@ -1369,8 +1363,8 @@ class Sentinel1Image(Nansat):
             balancingPower += powerBias
             blockN0 += powerBias
 
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
-                results['%s%s' % (self.obsMode, iSW)]['balancingPower'].append(balancingPower[iSW-1])
+            for iSW, name in zip(swath_ids, swath_names):
+                results[name]['balancingPower'].append(balancingPower[iSW-1])
 
         np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
 
