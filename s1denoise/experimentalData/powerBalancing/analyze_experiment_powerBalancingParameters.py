@@ -194,6 +194,7 @@ if update_npz_files:
         if ss not in d_s1[polarisation][pbname]:
             d_s1[polarisation][pbname][ss] = dict()
 
+
     # Loop over values for each mode and each IPF
     for ss in swath_names:
         for item in powerBalancingParameters[ss].items():
