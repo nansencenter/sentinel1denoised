@@ -17,7 +17,7 @@ if not instr in ['S1A', 'S1B']:
     exit()
 
 # Input directory with S1 files
-inputPath = sys.argv[3]  #'/mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip
+inputPath = sys.argv[3]  #'/mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip'
 
 # Output directory for storing statistics for individual files
 outputPath = sys.argv[4] #'/mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/noise_scaling'
