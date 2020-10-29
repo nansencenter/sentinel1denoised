@@ -9,7 +9,7 @@ python run_experiment_powerBalancingParameters.py S1A VH /path/to/L1/GRD/files /
 ```
 where the arguments:\
 1st - platform (S1A/S1B)\
-2nd - polarization (VH/HV)
+2nd - polarization (VH/HV)\
 3nd - path to input training Level-1 GRD data\
 4d  - path to output npz files with statistics in sub-blocks
 
