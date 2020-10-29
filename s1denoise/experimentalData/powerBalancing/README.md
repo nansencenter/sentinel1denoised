@@ -5,7 +5,7 @@ The directory contains scripts for the power balancing training. It is highly re
 The script 'run_experiment_powerBalancingParameters.py' loop over a set of S1 Level 1 GRD files to get statistics for each sub-block. Here is an example how to run it via IPython shell:
 
 ```python
-run run_experiment_powerBalancingParameters.py S1A VH /path/to/S1/L1/data /path/to/output/dir
+python run_experiment_powerBalancingParameters.py S1A VH /path/to/L1/GRD/files /path/to/output/dir
 ```
 where the arguments:\
 1st - platform (S1A/S1B)\
@@ -18,7 +18,7 @@ where the arguments:\
 Once you have statistics for many files you can obtain statistically aggregated power balancing factors for each sub-swath by scrpit called 'analyze_experiment_powerBalancingParameters.py':
 
 ```python
-run analyze_experiment_powerBalancingParameters.py S1A IW GRDH 1SDV /path/to/npz /path/to/output/file
+python analyze_experiment_powerBalancingParameters.py S1A IW GRDH 1SDV /path/to/npz /path/to/output/file
 ```
 
 where the arguments:\
