@@ -5,14 +5,17 @@ import datetime
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 from sys import exit
 
+############################################################
 # run example:
-# run analyze_experiment_powerBalancingParameters.py S1A  /mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip
-
+# run analyze_experiment_powerBalancingParameters.py S1A IW GRDH 1SDV /mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing/dolldrums /mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing/dolldrums
+############################################################
 # Instrument
 platform = sys.argv[1]
+
+# flag to update npz file with coefficients
+update_npz_files = True
 
 # Mode
 mode = sys.argv[2]
@@ -29,9 +32,6 @@ in_path = sys.argv[5]
 # dir to save updated output file with coefficients
 out_path = sys.argv[6]
 
-# flag to update npz file with coefficients
-update_npz_files = True
-
 if not platform in ['S1A', 'S1B']:
     print('The input data must be S1A or S1B')
     exit()
@@ -44,6 +44,7 @@ if not grd_mode in ['GRDM', 'GRDH']:
     print('The mode of the input GRD data must be GRDM or GRDH')
     exit()
 
+# Save results as updated npz file with old and obtained coefficients
 if update_npz_files:
     path_to_trained_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_%s.npz' % platform
     outfile_npz_file = '%s/ns_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
@@ -51,10 +52,10 @@ if update_npz_files:
 npzFilesAll = sorted(glob.glob('%s/%s_%s_%s_%s_*_powerBalancing.npz' % (in_path, platform,
                                                                         mode, grd_mode, pol_mode)))
 
-###################
-
-plt.clf()
-plt.figure(figsize=(15,4))
+# dicts with sub-swaths number and polarization
+swaths_number = {'IW': 3, 'EW': 5}[mode]
+swath_names = ['%s%s' % (mode,iSW) for iSW in range(1,swaths_number+1)]
+polarisation = {'1SDH':'HV', '1SDV':'VH'}[pol_mode]
 
 # update npz files
 update_npz_files = True
@@ -64,7 +65,7 @@ if update_npz_files:
     outfile_npz_file = '%s/pb_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
 
 # scan for PB npz files
-npzFilesAll = sorted(glob.glob('%s/%s_%s_%s_1SDH_*_powerBalancing.npz' % (in_path, platform,
+npzFilesAll = sorted(glob.glob('%s/%s_%s_%s_*_powerBalancing.npz' % (in_path, platform,
                                                                         mode, grd_mode)))
 
 # Check quality disclaimer #30 and #31 in https://qc.sentinel1.eo.esa.int/disclaimer/
@@ -72,6 +73,7 @@ npzFilesAll = sorted(glob.glob('%s/%s_%s_%s_1SDH_*_powerBalancing.npz' % (in_pat
 npzFiles = []
 
 for li, npzFile in enumerate(npzFilesAll):
+    print(npzFile)
     startDateTime = datetime.datetime.strptime(os.path.basename(npzFile).split('/')[-1][17:32], "%Y%m%dT%H%M%S")
     endDateTime = datetime.datetime.strptime(os.path.basename(npzFile).split('/')[-1][33:48], "%Y%m%dT%H%M%S")
     if (     platform=='S1A'
@@ -98,8 +100,8 @@ for npzFile in npzFiles:
     npz = np.load(npzFile)
     npz.allow_pickle = True
 
-    numberOfSubblocks = np.unique([ len(npz['%s%s' % (mode,iSW)].item()['balancingPower'])
-                                    for iSW in range(1,{'IW':4, 'EW':6}[mode]) ])
+    numberOfSubblocks = np.unique([ len(npz[iSW].item()['balancingPower'])
+                                    for iSW in swath_names])
     if numberOfSubblocks.size != 1:
         print('*** numberOfSubblocks are not consistent for all subswaths.')
         continue
@@ -107,18 +109,18 @@ for npzFile in npzFiles:
 
     for li in range(numberOfSubblocks):
         powerDifference.append([
-              np.nanmean(10*np.log10(npz['%s%s' % (mode,iSW)].item()['sigma0'][li]))
-            - np.nanmean(10*np.log10(npz['%s%s' % (mode,iSW)].item()['noiseEquivalentSigma0'][li]))
-            for iSW in range(1,{'IW':4, 'EW':6}[mode]) ])
+              np.nanmean(10*np.log10(npz[iSW].item()['sigma0'][li]))
+            - np.nanmean(10*np.log10(npz[iSW].item()['noiseEquivalentSigma0'][li]))
+            for iSW in swath_names])
         balancingPower.append([
-            npz['%s%s' % (mode,iSW)].item()['balancingPower'][li]
-            for iSW in range(1,{'IW':4, 'EW':6}[mode]) ])
+            npz[iSW].item()['balancingPower'][li]
+            for iSW in swath_names])
         correlationCoefficient.append([
-            npz['%s%s' % (mode,iSW)].item()['correlationCoefficient'][li]
-            for iSW in range(1,{'IW':4, 'EW':6}[mode]) ])
+            npz[iSW].item()['correlationCoefficient'][li]
+            for iSW in swath_names])
         fitResidual.append([
-            npz['%s%s' % (mode,iSW)].item()['fitResidual'][li]
-            for iSW in range(1,{'IW':4, 'EW':6}[mode]) ])
+            npz[iSW].item()['fitResidual'][li]
+            for iSW in swath_names])
         IPFversion.append(npz['IPFversion'])
         acqDate.append(datetime.datetime.strptime(os.path.basename(npzFile).split('_')[4], '%Y%m%dT%H%M%S'))
 
@@ -130,8 +132,8 @@ IPFversion = np.array(IPFversion)
 acqDate = np.array(acqDate)
 
 # compute fit values
-powerBalancingParameters = {'%s%s' % (mode,li): {} for li in range(1, {'IW':4, 'EW':6}[mode])}
-powerBalancingParametersRMSE = {'%s%s' % (mode,li): {} for li in range(1, {'IW':4, 'EW':6}[mode])}
+powerBalancingParameters = {li: {} for li in swath_names}
+powerBalancingParametersRMSE = {li: {} for li in swath_names}
 
 for IPFv in np.arange(2.4, 4.0, 0.1):
     if IPFv==2.7 and platform=='S1B':
@@ -148,11 +150,11 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
     fr = np.max(fitResidual[valid], axis=1)
     w = cc / fr
 
-    for iSW in range(1,{'IW':4, 'EW':6}[mode]):
-        bp = balancingPower[valid][:,iSW-1]
+    for iSW in range(0,swaths_number):
+        bp = balancingPower[valid][:,iSW]
         fitResults = np.polyfit(pd, bp, deg=0, w=w)
-        powerBalancingParameters['%s%s' % (mode,iSW)]['%.1f' % IPFv] = fitResults[0]
-        powerBalancingParametersRMSE['%s%s' % (mode,iSW)]['%.1f' % IPFv] = np.sqrt(np.sum((fitResults[0]-bp)**2 * w) / np.sum(w))
+        powerBalancingParameters[swath_names[iSW]]['%.1f' % IPFv] = fitResults[0]
+        powerBalancingParametersRMSE[swath_names[iSW]]['%.1f' % IPFv] = np.sqrt(np.sum((fitResults[0]-bp)**2 * w) / np.sum(w))
 
     if IPFv==2.7 and platform=='S1B':
         valid = np.logical_and( IPFversion==2.72,
@@ -165,22 +167,11 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
     fr = np.max(fitResidual[valid], axis=1)
     w = cc / fr
 
-    for iSW in range(1,{'IW':4, 'EW':6}[mode]):
-        bp = balancingPower[valid][:,iSW-1]
+    for iSW in range(0,swaths_number):
+        bp = balancingPower[valid][:,iSW]
         fitResults = np.polyfit(pd, bp, deg=0, w=w)
-        plt.subplot(1,({'IW':4, 'EW':6}[mode])-1,iSW); plt.hold(0)
-        plt.hist2d(bp,pd,bins=100,cmin=1,range=[[-2e-3,+2e-3],[-5,15]])
-        plt.hold(1)
-        plt.plot(np.polyval(fitResults, np.linspace(-5,+15,2)), np.linspace(-5,+15,2), linewidth=0.5, color='r')
-        plt.plot([-2e-3,+2e-3],[0,0], linewidth=0.5, color='k')
-
-# Save a figure with statistics on noise scaling
-plt.tight_layout()
-plt.savefig('%s_%s_%s_power_balancing.png' % (platform, mode), bbox_inches='tight', dpi=600)
 
 # if update_npz_files
-num_ss = {'EW': 5, 'IW': 3}
-
 if update_npz_files:
     print('\ngoing to update coeffients for the power balancing...')
     data = np.load(path_to_trained_npz)
@@ -189,44 +180,40 @@ if update_npz_files:
     # Restore dictonaries for the data
     d_s1 = {key: data[key].item() for key in data}
 
-    '''
-    print('\nold coefficients:')
-    try:
-        for i in range(1,num_ss[mode]+1):
-            ss = '%s%d' % (mode, i)
-            print(ss, d_s1['HV']['noiseScalingParameters'][ss][str(npz['IPFversion'])])
-    except:
-        print('\nNo old coefficients\n')
-    '''
-
     print('\nnew obtained coefficients')
 
-    # Loop over values for each mode and each IPF
-    for i in range(1, num_ss[mode] + 1):
-        ss = '%s%d' % (mode, i)
+    # Create dict structure for coefficient if does not exist. Should be optimized in future
+    for ss in swath_names:
+        try:
+            d_s1[polarisation]
+        except:
+            d_s1[polarisation] = {'powerBalancingParameters': {polarisation: {}}}
+        try:
+            d_s1[polarisation]['powerBalancingParameters'][ss]
+        except:
+            d_s1[polarisation]['powerBalancingParameters'] = {ss: {}}
 
+    # Loop over values for each mode and each IPF
+    for ss in swath_names:
         for item in powerBalancingParameters[ss].items():
             ipf_ver = item[0]
-
-            # try replace existing value
             try:
-                d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[grd_mode]]['powerBalancingParameters'][ss][ipf_ver] = \
-                    powerBalancingParameters[ss][ipf_ver]
-                print('adding new record %s (IPF: %s)...' % (ss, ipf_ver))
+                d_s1[polarisation]['powerBalancingParameters'][ss][ipf_ver]
             except:
-                # make a new record
-                print('adding new record %s (IPF: %s)...' % (ss, ipf_ver))
-                d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[grd_mode]]['powerBalancingParameters'].update(
-                    {ss: {ipf_ver: powerBalancingParameters[ss][ipf_ver]}}
-                )
+                d_s1[polarisation]['powerBalancingParameters'][ss] = {ipf_ver: {}}
+
+            d_s1[polarisation]['powerBalancingParameters'][ss][ipf_ver] = \
+                    powerBalancingParameters[ss][ipf_ver]
+
+            print('\nadding new record %s (IPF: %s)...' % (ss, ipf_ver))
+            print('%s\n' % powerBalancingParameters[ss][ipf_ver])
 
 print('\nPrinting updated coefficients for double check:')
 
-for i in range(1, num_ss[mode] + 1):
-    ss = '%s%d' % (mode, i)
+for ss in swath_names:
     for item in powerBalancingParameters[ss].items():
         ipf_ver = item[0]
-        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1['%s' % {'1SDH':'HV', '1SDV':'VH'}[grd_mode]]['powerBalancingParameters'][ss][ipf_ver]))
+        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1[polarisation]['powerBalancingParameters'][ss][ipf_ver]))
 
 # save updated version
 np.savez(outfile_npz_file, **d_s1)
