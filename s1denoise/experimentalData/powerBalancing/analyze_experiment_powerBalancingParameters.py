@@ -1,20 +1,22 @@
+""" This python script process aggregated statistics
+for individual npz files to obtain
+final results in power balancing stage
+
+run example:
+python analyze_experiment_powerBalancingParameters.py S1A IW GRDH 1SDV /path/to/npz/files /out/path
+"""
+
 import os
 import sys
 import glob
 import datetime
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
 from sys import exit
 
-############################################################
-# run example:
-# run analyze_experiment_powerBalancingParameters.py S1A IW GRDH 1SDV /mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing/dolldrums /mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing/dolldrums
-############################################################
 # Instrument
 platform = sys.argv[1]
 
-# flag to update npz file with coefficients
+# flag to generate updated npz file with coefficients
 update_npz_files = True
 
 # Mode
@@ -46,6 +48,7 @@ if not grd_mode in ['GRDM', 'GRDH']:
 
 # Save results as updated npz file with old and obtained coefficients
 if update_npz_files:
+    # Path to your npz file with coefficients
     path_to_trained_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_%s.npz' % platform
     outfile_npz_file = '%s/ns_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
 
@@ -180,31 +183,23 @@ if update_npz_files:
     # Restore dictonaries for the data
     d_s1 = {key: data[key].item() for key in data}
 
-    print('\nnew obtained coefficients')
+    pbname = 'powerBalancingParameters'
 
-    # Create dict structure for coefficient if does not exist. Should be optimized in future
+    # Create dict structure for coefficient if does not exist
     for ss in swath_names:
-        try:
-            d_s1[polarisation]
-        except:
-            d_s1[polarisation] = {'powerBalancingParameters': {polarisation: {}}}
-        try:
-            d_s1[polarisation]['powerBalancingParameters'][ss]
-        except:
-            d_s1[polarisation]['powerBalancingParameters'] = {ss: {}}
+        if polarisation not in d_s1:
+            d_s1[polarisation] = {pbname: {}}
+        if pbname not in d_s1[polarisation]:
+            d_s1[polarisation][pbname] = {ss: {}}
+        if ss not in d_s1[polarisation][pbname]:
+            d_s1[polarisation][pbname][ss] = dict()
+
 
     # Loop over values for each mode and each IPF
     for ss in swath_names:
         for item in powerBalancingParameters[ss].items():
             ipf_ver = item[0]
-            try:
-                d_s1[polarisation]['powerBalancingParameters'][ss][ipf_ver]
-            except:
-                d_s1[polarisation]['powerBalancingParameters'][ss] = {ipf_ver: {}}
-
-            d_s1[polarisation]['powerBalancingParameters'][ss][ipf_ver] = \
-                    powerBalancingParameters[ss][ipf_ver]
-
+            d_s1[polarisation]['powerBalancingParameters'][ss][ipf_ver] = powerBalancingParameters[ss][ipf_ver]
             print('\nadding new record %s (IPF: %s)...' % (ss, ipf_ver))
             print('%s\n' % powerBalancingParameters[ss][ipf_ver])
 
