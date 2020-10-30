@@ -162,37 +162,50 @@ class Sentinel1Image(Nansat):
         self.annotationXML = {}
         self.calibrationXML = {}
         self.noiseXML = {}
+
         if zipfile.is_zipfile(self.filename):
-            zf = zipfile.PyZipFile(self.filename)
-            annotationFiles = [fn for fn in zf.namelist() if 'annotation/s1' in fn]
-            calibrationFiles = [fn for fn in zf.namelist()
-                                if 'annotation/calibration/calibration-s1' in fn]
-            noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
-            for polarization in [txPol + 'H', txPol + 'V']:
-                self.annotationXML[polarization] = parseString(
-                    [zf.read(fn) for fn in annotationFiles if polarization.lower() in fn][0])
-                self.calibrationXML[polarization] = parseString(
-                    [zf.read(fn) for fn in calibrationFiles if polarization.lower() in fn][0])
-                self.noiseXML[polarization] = parseString(
-                    [zf.read(fn) for fn in noiseFiles if polarization.lower() in fn][0])
-            self.manifestXML = parseString(zf.read([fn for fn in zf.namelist()
-                                                    if 'manifest.safe' in fn][0]))
-            zf.close()
+            with zipfile.PyZipFile(self.filename) as zf:
+                annotationFiles = [fn for fn in zf.namelist() if 'annotation/s1' in fn]
+                calibrationFiles = [fn for fn in zf.namelist()
+                                    if 'annotation/calibration/calibration-s1' in fn]
+                noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
+
+                for polarization in [txPol + 'H', txPol + 'V']:
+                    self.annotationXML[polarization] = parseString(
+                            [zf.read(fn) for fn in annotationFiles if polarization.lower() in fn][0])
+                    self.calibrationXML[polarization] = parseString(
+                        [zf.read(fn) for fn in calibrationFiles if polarization.lower() in fn][0])
+                    self.noiseXML[polarization] = parseString(
+                        [zf.read(fn) for fn in noiseFiles if polarization.lower() in fn][0])
+                self.manifestXML = parseString(zf.read([fn for fn in zf.namelist()
+                                                        if 'manifest.safe' in fn][0]))
         else:
             annotationFiles = [fn for fn in glob.glob(self.filename+'/annotation/*') if 's1' in fn]
             calibrationFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
                                 if 'calibration-s1' in fn]
             noiseFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
                           if 'noise-s1' in fn]
+
             for polarization in [txPol + 'H', txPol + 'V']:
-                self.annotationXML[polarization] = parseString(
-                    [open(fn).read() for fn in annotationFiles if polarization.lower() in fn][0])
-                self.calibrationXML[polarization] = parseString(
-                    [open(fn).read() for fn in calibrationFiles if polarization.lower() in fn][0])
-                self.noiseXML[polarization] = parseString(
-                    [open(fn).read() for fn in noiseFiles if polarization.lower() in fn][0])
-            self.manifestXML = parseString(
-                open(glob.glob(self.filename+'/manifest.safe')[0]).read())
+
+                for fn in annotationFiles:
+                    if polarization.lower() in fn:
+                        with open(fn) as ff:
+                            self.annotationXML[polarization] = parseString(ff.read())
+
+                for fn in calibrationFiles:
+                    if polarization.lower() in fn:
+                        with open(fn) as ff:
+                            self.calibrationXML[polarization] = parseString(ff.read())
+
+                for fn in noiseFiles:
+                    if polarization.lower() in fn:
+                        with open(fn) as ff:
+                            self.noiseXML[polarization] = parseString(ff.read())
+
+            with open(glob.glob(self.filename+'/manifest.safe')[0]) as ff:
+                self.manifestXML = parseString(ff.read())
+
         # scene center time will be used as the reference for relative azimuth time in seconds
         self.time_coverage_center = ( self.time_coverage_start + timedelta(
             seconds=(self.time_coverage_end - self.time_coverage_start).total_seconds()/2) )
@@ -1585,20 +1598,31 @@ class Sentinel1Image(Nansat):
         return s0o
 
     def getS0Nesz(self, polarization):
-        """ Get matrices with Sigma0, and noise substracted Sigma0 (ESA/NERSC) """
-        results = {}
-        results['src'] = self.path
-        results['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
+        """ Get a dictonary of matrices with Sigma0, and NESZ by ESA and NERSC algorithms
+        Parameters
+        ----------
+        polarisation : str
+            'HH' or 'HV'
+
+        Returns
+        -------
+        d_s0_nesz : dict
+            Dictonary with full size arrays with s0 and NESZ (ESA, NERSC)
+
+        """
+
+        d_s0_nesz = {}
+        d_s0_nesz['src'] = self.path
+        d_s0_nesz['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
         sz = self.rawSigma0Map(polarization=polarization)
         sz[sz == 0] = np.nan
-        results['sz'] = sz
-        results['nesz_esa'] = self.rawNoiseEquivalentSigma0Map(polarization=polarization)
-        results['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
-        return results
+        d_s0_nesz['sz'] = sz
+        d_s0_nesz['nesz_esa'] = self.rawNoiseEquivalentSigma0Map(polarization=polarization)
+        d_s0_nesz['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
+        return d_s0_nesz
 
     def qualityAssesment(self, polarization, num_px = 100):
-        '''
-        Denoising quality assessment near subswath margins based on Fisher's criteria
+        ''' Denoising quality assessment near subswath margins based on Fisher's criteria
 
         Parameters
         ----------
