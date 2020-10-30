@@ -162,37 +162,49 @@ class Sentinel1Image(Nansat):
         self.annotationXML = {}
         self.calibrationXML = {}
         self.noiseXML = {}
+
         if zipfile.is_zipfile(self.filename):
-            zf = zipfile.PyZipFile(self.filename)
-            annotationFiles = [fn for fn in zf.namelist() if 'annotation/s1' in fn]
-            calibrationFiles = [fn for fn in zf.namelist()
-                                if 'annotation/calibration/calibration-s1' in fn]
-            noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
-            for polarization in [txPol + 'H', txPol + 'V']:
-                self.annotationXML[polarization] = parseString(
-                    [zf.read(fn) for fn in annotationFiles if polarization.lower() in fn][0])
-                self.calibrationXML[polarization] = parseString(
-                    [zf.read(fn) for fn in calibrationFiles if polarization.lower() in fn][0])
-                self.noiseXML[polarization] = parseString(
-                    [zf.read(fn) for fn in noiseFiles if polarization.lower() in fn][0])
-            self.manifestXML = parseString(zf.read([fn for fn in zf.namelist()
-                                                    if 'manifest.safe' in fn][0]))
-            zf.close()
+            with zipfile.PyZipFile(self.filename) as zf:
+                annotationFiles = [fn for fn in zf.namelist() if 'annotation/s1' in fn]
+                calibrationFiles = [fn for fn in zf.namelist()
+                                    if 'annotation/calibration/calibration-s1' in fn]
+                noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
+
+                for polarization in [txPol + 'H', txPol + 'V']:
+                    self.annotationXML[polarization] = parseString(
+                            [zf.read(fn) for fn in annotationFiles if polarization.lower() in fn][0])
+                    self.calibrationXML[polarization] = parseString(
+                        [zf.read(fn) for fn in calibrationFiles if polarization.lower() in fn][0])
+                    self.noiseXML[polarization] = parseString(
+                        [zf.read(fn) for fn in noiseFiles if polarization.lower() in fn][0])
+                self.manifestXML = parseString(zf.read([fn for fn in zf.namelist()
+                                                        if 'manifest.safe' in fn][0]))
         else:
             annotationFiles = [fn for fn in glob.glob(self.filename+'/annotation/*') if 's1' in fn]
             calibrationFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
                                 if 'calibration-s1' in fn]
             noiseFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
                           if 'noise-s1' in fn]
+
             for polarization in [txPol + 'H', txPol + 'V']:
-                self.annotationXML[polarization] = parseString(
-                    [open(fn).read() for fn in annotationFiles if polarization.lower() in fn][0])
-                self.calibrationXML[polarization] = parseString(
-                    [open(fn).read() for fn in calibrationFiles if polarization.lower() in fn][0])
-                self.noiseXML[polarization] = parseString(
-                    [open(fn).read() for fn in noiseFiles if polarization.lower() in fn][0])
-            self.manifestXML = parseString(
-                open(glob.glob(self.filename+'/manifest.safe')[0]).read())
+                for fn in annotationFiles:
+                    if polarization.lower() in fn:
+                        with open(fn, 'r') as ff:
+                            self.annotationXML[polarization] = parseString(ff)[0]
+
+                for fn in calibrationFiles:
+                    if polarization.lower() in fn:
+                        with open(fn, 'r') as ff:
+                            self.calibrationXML[polarization] = parseString(ff)[0]
+
+                for fn in noiseFiles:
+                    if polarization.lower() in fn:
+                        with open(fn, 'r') as ff:
+                            self.noiseXML[polarization] = parseString(ff)[0]
+
+            with open(glob.glob(self.filename+'/manifest.safe')[0], 'r') as ff:
+                self.manifestXML = parseString(ff)[0]
+
         # scene center time will be used as the reference for relative azimuth time in seconds
         self.time_coverage_center = ( self.time_coverage_start + timedelta(
             seconds=(self.time_coverage_end - self.time_coverage_start).total_seconds()/2) )
