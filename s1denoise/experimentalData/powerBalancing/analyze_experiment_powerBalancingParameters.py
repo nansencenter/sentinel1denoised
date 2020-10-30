@@ -54,6 +54,7 @@ if not grd_mode in ['GRDM', 'GRDH']:
 if update_npz_files:
     # Path to your npz file with coefficients
     path_to_trained_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_%s.npz' % platform
+    # Path to resultant updated npz file with coefficients
     outfile_npz_file = '%s/ns_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
 
 npzFilesAll = sorted(glob.glob('%s/%s_%s_%s_%s_*_powerBalancing.npz' % (in_path, platform,
@@ -180,7 +181,7 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
 
 # if update_npz_files
 if update_npz_files:
-    print('\ngoing to update coeffients for the power balancing...')
+    print('\nGoing to update power balancing coefficients...')
     data = np.load(path_to_trained_npz)
     data.allow_pickle = True
 
@@ -189,7 +190,7 @@ if update_npz_files:
 
     pbname = 'powerBalancingParameters'
 
-    # Create dict structure for coefficient if does not exist
+    # Create dict structure for coefficients if it does not exist
     for ss in swath_names:
         if polarisation not in d_s1:
             d_s1[polarisation] = {pbname: {}}
@@ -203,7 +204,7 @@ if update_npz_files:
         for item in powerBalancingParameters[ss].items():
             ipf_ver = item[0]
             d_s1[polarisation]['powerBalancingParameters'][ss][ipf_ver] = powerBalancingParameters[ss][ipf_ver]
-            print('\nadding new record %s (IPF: %s)...' % (ss, ipf_ver))
+            print('\nAdding new record %s (IPF: %s)...' % (ss, ipf_ver))
             print('%s\n' % powerBalancingParameters[ss][ipf_ver])
 
 print('\nPrinting updated coefficients for double check:')
