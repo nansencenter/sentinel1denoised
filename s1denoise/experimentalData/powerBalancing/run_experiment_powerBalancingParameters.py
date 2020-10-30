@@ -1,3 +1,10 @@
+""" This python script process individual S1 Level-1 GRD files
+to get statistics for each sub-block
+
+run example:
+python run_experiment_powerBalancingParameters.py S1A VH /path/to/L1/GRD/files /path/to/output/dir
+"""
+
 import os
 import sys
 import glob
@@ -5,9 +12,6 @@ import shutil
 from multiprocessing import Pool
 from s1denoise import Sentinel1Image
 from sys import exit
-
-# run example:
-# run run_experiment_powerBalancingParameters.py S1A VH /mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip /mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing/dolldrums
 
 # Instrument
 instrument = sys.argv[1]
@@ -19,11 +23,11 @@ if not instrument in ['S1A', 'S1B']:
     print('The input data must be S1A or S1B')
     exit()
 
-# Input directory with S1 files
-inputPath = sys.argv[3]  #'/mnt/sverdrup-2/sat_auxdata/denoise/dolldrums/zip
+# Input directory with S1 L1 GRD files
+inputPath = sys.argv[3]
 
 # Output directory for storing statistics for individual files
-outputPath = sys.argv[4] #'/mnt/sverdrup-2/sat_auxdata/denoise/coefficients_training/power_balancing'
+outputPath = sys.argv[4]
 
 zipFilesAll = glob.glob('%s/*%s*.zip' % (inputPath, instrument))
 
