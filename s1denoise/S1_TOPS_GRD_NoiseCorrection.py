@@ -187,23 +187,24 @@ class Sentinel1Image(Nansat):
                           if 'noise-s1' in fn]
 
             for polarization in [txPol + 'H', txPol + 'V']:
+
                 for fn in annotationFiles:
                     if polarization.lower() in fn:
-                        with open(fn, 'r') as ff:
-                            self.annotationXML[polarization] = parseString(ff)[0]
+                        with open(fn) as ff:
+                            self.annotationXML[polarization] = parseString(ff.read())
 
                 for fn in calibrationFiles:
                     if polarization.lower() in fn:
-                        with open(fn, 'r') as ff:
-                            self.calibrationXML[polarization] = parseString(ff)[0]
+                        with open(fn) as ff:
+                            self.calibrationXML[polarization] = parseString(ff.read())
 
                 for fn in noiseFiles:
                     if polarization.lower() in fn:
-                        with open(fn, 'r') as ff:
-                            self.noiseXML[polarization] = parseString(ff)[0]
+                        with open(fn) as ff:
+                            self.noiseXML[polarization] = parseString(ff.read())
 
-            with open(glob.glob(self.filename+'/manifest.safe')[0], 'r') as ff:
-                self.manifestXML = parseString(ff)[0]
+            with open(glob.glob(self.filename+'/manifest.safe')[0]) as ff:
+                self.manifestXML = parseString(ff.read())
 
         # scene center time will be used as the reference for relative azimuth time in seconds
         self.time_coverage_center = ( self.time_coverage_start + timedelta(
