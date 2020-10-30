@@ -1585,20 +1585,31 @@ class Sentinel1Image(Nansat):
         return s0o
 
     def getS0Nesz(self, polarization):
-        """ Get matrices with Sigma0, and noise substracted Sigma0 (ESA/NERSC) """
-        results = {}
-        results['src'] = self.path
-        results['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
+        """ Get a dictonary of matrices with Sigma0, and NESZ by ESA and NERSC algorithms
+        Parameters
+        ----------
+        polarisation : str
+            'HH' or 'HV'
+
+        Returns
+        -------
+        d_s0_nesz : dict
+            Dictonary with full size arrays with s0 and NESZ (ESA, NERSC)
+
+        """
+
+        d_s0_nesz = {}
+        d_s0_nesz['src'] = self.path
+        d_s0_nesz['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
         sz = self.rawSigma0Map(polarization=polarization)
         sz[sz == 0] = np.nan
-        results['sz'] = sz
-        results['nesz_esa'] = self.rawNoiseEquivalentSigma0Map(polarization=polarization)
-        results['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
-        return results
+        d_s0_nesz['sz'] = sz
+        d_s0_nesz['nesz_esa'] = self.rawNoiseEquivalentSigma0Map(polarization=polarization)
+        d_s0_nesz['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
+        return d_s0_nesz
 
     def qualityAssesment(self, polarization, num_px = 100):
-        '''
-        Denoising quality assessment near subswath margins based on Fisher's criteria
+        ''' Denoising quality assessment near subswath margins based on Fisher's criteria
 
         Parameters
         ----------
