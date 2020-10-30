@@ -4,6 +4,10 @@ final results in power balancing stage
 
 run example:
 python analyze_experiment_powerBalancingParameters.py S1A IW GRDH 1SDV /path/to/npz/files /out/path
+
+Important note:
+If you wish to generate updated npz file with coefficients you need to specify
+a path to it in variable called 'path_to_trained_npz' and define 'update_npz_files' as True
 """
 
 import os
@@ -193,7 +197,6 @@ if update_npz_files:
             d_s1[polarisation][pbname] = {ss: {}}
         if ss not in d_s1[polarisation][pbname]:
             d_s1[polarisation][pbname][ss] = dict()
-
 
     # Loop over values for each mode and each IPF
     for ss in swath_names:
