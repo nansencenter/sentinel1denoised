@@ -50,7 +50,7 @@ out_path = sys.argv[6]
 update_npz_files = True
 
 # dicts with sub-swaths number and polarization
-swaths_number = {'IW': 3, 'EW': 4}[mode]
+swaths_number = {'IW': 3, 'EW': 5}[mode]
 swath_names = ['%s%s' % (mode,iSW) for iSW in range(1,swaths_number+1)]
 polarisation = {'1SDH':'HV', '1SDV':'VH'}[pol_mode]
 
