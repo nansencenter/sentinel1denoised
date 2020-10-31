@@ -53,7 +53,7 @@ if not grd_mode in ['GRDM', 'GRDH']:
 # Save results as updated npz file with old and obtained coefficients
 if update_npz_files:
     # Path to your npz file with coefficients
-    path_to_trained_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_%s.npz' % platform
+    path_to_trained_npz = sys.argv[7]
     # Path to resultant updated npz file with coefficients
     outfile_npz_file = '%s/ns_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
 
@@ -68,9 +68,11 @@ polarisation = {'1SDH':'HV', '1SDV':'VH'}[pol_mode]
 # update npz files
 update_npz_files = True
 
+'''
 if update_npz_files:
     path_to_trained_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_%s.npz' % platform
     outfile_npz_file = '%s/pb_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
+'''
 
 # scan for PB npz files
 npzFilesAll = sorted(glob.glob('%s/%s_%s_%s_*_powerBalancing.npz' % (in_path, platform,
