@@ -55,7 +55,7 @@ if update_npz_files:
     # Path to your npz file with coefficients
     path_to_trained_npz = sys.argv[7]
     # Path to resultant updated npz file with coefficients
-    outfile_npz_file = '%s/ns_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
+    outfile_npz_file = '%s/pb_%s_%s_denoising_parameters_%s.npz' % (out_path, mode, grd_mode, platform)
 
 npzFilesAll = sorted(glob.glob('%s/%s_%s_%s_%s_*_powerBalancing.npz' % (in_path, platform,
                                                                         mode, grd_mode, pol_mode)))

@@ -128,8 +128,8 @@ noiseScalingParametersRMSE = {'%s' % li: {} for li in swath_names}
 for IPFv in np.arange(2.4, 4.0, 0.1):
     for iSW in swath_names:
         if IPFv==2.7 and platform=='S1B':
-            valid = np.logical_and(np.array(IPFversion['%s%s' % (mode, iSW)])==2.72,
-                                   np.array(acqDate['%s%s' % (mode, iSW)]) < datetime.datetime(2017,1,16,13,42,34) )
+            valid = np.logical_and(np.array(IPFversion['%s' % iSW])==2.72,
+                                   np.array(acqDate['%s' % iSW]) < datetime.datetime(2017,1,16,13,42,34) )
         else:
             valid = np.isclose((np.trunc(np.array(IPFversion[iSW])*10)/10.), IPFv, atol=0.01)
         if valid.sum()==0:
