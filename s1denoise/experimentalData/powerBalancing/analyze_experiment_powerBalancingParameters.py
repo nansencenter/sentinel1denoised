@@ -32,7 +32,7 @@ grd_mode = sys.argv[3]
 # Polarization file prefix
 pol_mode = sys.argv[4]
 
-# dir path to noise scaling training data
+# dir path to S1 L1 GRD training data
 in_path = sys.argv[5]
 
 # dir to save updated output file with coefficients
