@@ -27,10 +27,6 @@ from collections import defaultdict
 # Instrument
 platform = sys.argv[1]
 
-# 1st define path to your local existing file with coefficients that is suppose to be the basis for the updated file in output dir
-#path_to_coefficients_npz = os.path.join(os.path.dirname(os.path.realpath(__file__))
-path_to_coefficients_npz = '/Home/denemc/miniconda3/envs/py3s1denoise/lib/python3.7/site-packages/s1denoise-0.1-py3.7.egg/s1denoise/denoising_parameters_S1A.npz'
-
 # Mode
 mode = sys.argv[2]
 
@@ -48,6 +44,10 @@ out_path = sys.argv[6]
 
 # flag to update npz file with coefficients
 update_npz_files = True
+
+if update_npz_files:
+    # path_to_coefficients_npz = os.path.join(os.path.dirname(os.path.realpath(__file__))
+    path_to_coefficients_npz = sys.argv[7]
 
 # dicts with sub-swaths number and polarization
 swaths_number = {'IW': 3, 'EW': 5}[mode]
