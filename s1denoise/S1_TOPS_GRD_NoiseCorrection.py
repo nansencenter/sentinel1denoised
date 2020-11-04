@@ -1602,7 +1602,7 @@ class Sentinel1Image(Nansat):
         Parameters
         ----------
         polarisation : str
-            'HH' or 'HV'
+            'HH', 'HV', 'VV', 'VH'
 
         Returns
         -------
@@ -1627,7 +1627,7 @@ class Sentinel1Image(Nansat):
         Parameters
         ----------
         polarisation : str
-            'HH' or 'HV'
+            'HH', 'HV', 'VV', 'VH'
 
         num_px : int
             Size of window
@@ -1651,9 +1651,11 @@ class Sentinel1Image(Nansat):
         q_ll_nersc = []
         q_ll_esa = []
 
-        # mean for all bursts in sub-swath
         q_ll_nersc_ss = []
         q_ll_esa_ss = []
+
+        # mean for all bursts in sub-swath
+        results = {'QAM_ESA': {}, 'QAM_NERSC': {}}
 
         print('\nDenoise evaluation...\n')
         for li in range(1, {'IW': 3, 'EW': 5}[self.obsMode]):
@@ -1704,11 +1706,15 @@ class Sentinel1Image(Nansat):
 
                 print('Quality assesment for burst %s (NERSC/ESA) = %.3f/%.3f' % (i, q_nersc, q_esa))
 
+                results['QAM_ESA']['%s%s-%s%s' % (self.obsMode, li, self.obsMode, li+1)] = q_esa
+                results['QAM_NERSC']['%s%s-%s%s' % (self.obsMode, li, self.obsMode, li + 1)] = q_nersc
+
             q_ll_nersc_ss.append(np.nanmean(q_temp_nersc))
             q_ll_esa_ss.append(np.nanmean(q_temp_esa))
 
         print('\nMean quality assessment NERSC: %s' % np.nanmean(q_ll_nersc))
         print('Mean quality assessment ESA: %s\n' % np.nanmean(q_ll_esa))
-
-        return q_ll_nersc_ss, q_ll_esa_ss
+        results['QAM_ESA']['Mean'] = np.nanmean(q_ll_esa)
+        results['QAM_NERSC']['Mean'] = np.nanmean(q_ll_nersc)
+        return results
 
