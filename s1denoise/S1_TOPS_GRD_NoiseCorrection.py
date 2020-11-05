@@ -1695,8 +1695,8 @@ class Sentinel1Image(Nansat):
                             swath_bounds[subswath_name]['lastRangeSample'][i] + num_px]
                 s0_02_esa_std = np.nanstd(s0_02_esa)
 
-                q_nersc = (np.nanmean(s0_01) - np.nanmean(s0_02)) / (s0_01_std + s0_02_std)
-                q_esa = (np.nanmean(s0_01_esa) - np.nanmean(s0_02_esa)) / (s0_01_esa_std + s0_02_esa_std)
+                q_nersc = np.abs((np.nanmean(s0_01) - np.nanmean(s0_02)) / (s0_01_std + s0_02_std))
+                q_esa = np.abs((np.nanmean(s0_01_esa) - np.nanmean(s0_02_esa)) / (s0_01_esa_std + s0_02_esa_std))
 
                 q_ll_nersc.append(q_nersc)
                 q_ll_esa.append(q_esa)
@@ -1712,9 +1712,14 @@ class Sentinel1Image(Nansat):
             q_ll_nersc_ss.append(np.nanmean(q_temp_nersc))
             q_ll_esa_ss.append(np.nanmean(q_temp_esa))
 
-        print('\nMean quality assessment NERSC: %s' % np.nanmean(q_ll_nersc))
-        print('Mean quality assessment ESA: %s\n' % np.nanmean(q_ll_esa))
-        results['QAM_ESA']['Mean'] = np.nanmean(q_ll_esa)
-        results['QAM_NERSC']['Mean'] = np.nanmean(q_ll_nersc)
+        mean_esa_qam   = np.nanmean(q_ll_esa)
+        mean_nersc_qam = np.nanmean(q_ll_nersc)
+
+        print('\n### Mean quality assessment ESA: %s' % mean_esa_qam)
+        print('### Mean quality assessment NERSC: %s\n' % mean_nersc_qam)
+
+        results['QAM_ESA']['Mean'] = mean_esa_qam
+        results['QAM_NERSC']['Mean'] = mean_nersc_qam
+
         return results
 
