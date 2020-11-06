@@ -1664,10 +1664,12 @@ class Sentinel1Image(Nansat):
             # globals()[var_name] = var_name
 
             # lists to average all bursts within subswath
-            q_temp_nersc = []
-            q_temp_esa = []
+            q_subswath_nersc = []
+            q_subswath_esa = []
 
             for i in range(len(swath_bounds[subswath_name]['firstAzimuthLine'])):
+                q_nersc = []
+                q_esa = []
                 middle_az = round((swath_bounds[subswath_name]['firstAzimuthLine'][i]-\
                             swath_bounds[subswath_name]['lastAzimuthLine'][i])/2)
 
@@ -1695,28 +1697,38 @@ class Sentinel1Image(Nansat):
                             swath_bounds[subswath_name]['lastRangeSample'][i] + num_px]
                 s0_02_esa_std = np.nanstd(s0_02_esa)
 
+                # Current burst
                 q_nersc = np.abs((np.nanmean(s0_01) - np.nanmean(s0_02)) / (s0_01_std + s0_02_std))
-                q_esa = np.abs((np.nanmean(s0_01_esa) - np.nanmean(s0_02_esa)) / (s0_01_esa_std + s0_02_esa_std))
+                q_esa =   np.abs((np.nanmean(s0_01_esa) - np.nanmean(s0_02_esa)) / (s0_01_esa_std + s0_02_esa_std))
 
-                q_ll_nersc.append(q_nersc)
-                q_ll_esa.append(q_esa)
+                print('Quality assesment for burst %s (NERSC/ESA) = %.5f/%.5f' % (i, q_nersc, q_esa))
 
-                q_temp_nersc.append(q_nersc)
-                q_temp_esa.append(q_esa)
+                # Collect burst values
+                q_subswath_nersc.append(q_nersc)
+                q_subswath_esa.append(q_esa)
 
-                print('Quality assesment for burst %s (NERSC/ESA) = %.3f/%.3f' % (i, q_nersc, q_esa))
+            qam_ss_mean_nersc = np.nanmean(q_subswath_nersc)
+            qam_ss_mean_esa = np.nanmean(q_subswath_esa)
 
-                results['QAM_ESA']['%s%s-%s%s' % (self.obsMode, li, self.obsMode, li+1)] = q_esa
-                results['QAM_NERSC']['%s%s-%s%s' % (self.obsMode, li, self.obsMode, li + 1)] = q_nersc
+            results['QAM_ESA']['%s%s-%s%s' % (self.obsMode, li, self.obsMode, li + 1)] = qam_ss_mean_esa
+            results['QAM_NERSC']['%s%s-%s%s' % (self.obsMode, li, self.obsMode, li + 1)] = qam_ss_mean_nersc
 
-            q_ll_nersc_ss.append(np.nanmean(q_temp_nersc))
-            q_ll_esa_ss.append(np.nanmean(q_temp_esa))
+            # Collect mean values for sub-swath
+            q_ll_nersc_ss.append(qam_ss_mean_nersc)
+            q_ll_esa_ss.append(qam_ss_mean_esa)
 
-        mean_esa_qam   = np.nanmean(q_ll_esa)
-        mean_nersc_qam = np.nanmean(q_ll_nersc)
+            print('\nMeans for sub-swath (NERSC/ESA) = %.5f/%.5f\n' % (qam_ss_mean_nersc, qam_ss_mean_esa))
 
-        print('\n### Mean quality assessment ESA: %s' % mean_esa_qam)
-        print('### Mean quality assessment NERSC: %s\n' % mean_nersc_qam)
+        # Mean for all sub-swaths
+        print('\n\Lists for sub-swaths:\n')
+        print('NERSC: %s' % q_ll_nersc_ss)
+        print('ESA: %s\n' % q_ll_esa_ss)
+
+        mean_esa_qam   = np.nanmean(q_ll_esa_ss)
+        mean_nersc_qam = np.nanmean(q_ll_nersc_ss)
+
+        print('\n###-> Mean quality assessment ESA: %s' % mean_esa_qam)
+        print('###-> Mean quality assessment NERSC: %s\n' % mean_nersc_qam)
 
         results['QAM_ESA']['Mean'] = mean_esa_qam
         results['QAM_NERSC']['Mean'] = mean_nersc_qam
