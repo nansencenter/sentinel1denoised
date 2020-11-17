@@ -176,39 +176,40 @@ for IPFv in np.arange(2.4, 4.0, 0.1):
         fitResults = np.polyfit(pd, sf, deg=0, w=w)
         print(fitResults[0])
 
+# if update_npz_files
 if update_npz_files:
-    print('\ngoing to update coefficients for the noise scaling...')
+    print('\nGoing to update noise scaling coefficients...')
     data = np.load(path_to_coefficients_npz)
     data.allow_pickle = True
 
     # Restore dictonaries for the data
     d_s1 = {key: data[key].item() for key in data}
 
-    print('\nnew obtained coefficients')
+    parName = 'noiseScalingParameters'
 
-    # loop over each mode and each IPF
+    # Create dict structure for coefficients if it does not exist
+    for ss in swath_names:
+        if polarisation not in d_s1:
+            d_s1[polarisation] = {parName: {}}
+        if parName not in d_s1[polarisation]:
+            d_s1[polarisation][parName] = {ss: {}}
+        if ss not in d_s1[polarisation][parName]:
+            d_s1[polarisation][parName][ss] = dict()
+
+    # Loop over values for each mode and each IPF
     for ss in swath_names:
         for item in noiseScalingParameters[ss].items():
             ipf_ver = item[0]
-            print(ipf_ver)
-
-            # try replace existing value
-            try:
-                d_s1['%s' % polarisation]['noiseScalingParameters'][ss][ipf_ver] = \
-                    noiseScalingParameters[ss][ipf_ver]
-                print('success adding new record %s (IPF: %s)...' % (ss, ipf_ver))
-            except:
-                # make a new record
-                print('trying adding new record %s (IPF: %s)...' % (ss, ipf_ver))
-                d_s1['%s' % polarisation]['noiseScalingParameters'].update(
-                    {ss: {ipf_ver: noiseScalingParameters[ss][ipf_ver]}}
-                )
+            d_s1[polarisation][parName][ss][ipf_ver] = noiseScalingParameters[ss][ipf_ver]
+            print('\nAdding new record %s (IPF: %s)...' % (ss, ipf_ver))
+            print('%s\n' % noiseScalingParameters[ss][ipf_ver])
 
 print('\nPrinting updated coefficients for double check:')
+
 for ss in swath_names:
     for item in noiseScalingParameters[ss].items():
         ipf_ver = item[0]
-        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1[polarisation]['noiseScalingParameters'][ss][ipf_ver]))
+        print('\nMode: %s, IPF: %s, Value: %s' % (ss, ipf_ver, d_s1[polarisation][parName][ss][ipf_ver]))
 
 # save updated version
 np.savez(outfile_npz_file, **d_s1)
