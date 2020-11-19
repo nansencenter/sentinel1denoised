@@ -27,7 +27,7 @@ exp_names = {
 
 
 def main():
-    """ Find zip files and launch experiment_powerBalancing processing """
+    """ Find zip files and launch (multi)processing """
     global out_dir, pol, exp_name
     args = parse_run_experiment_args()
 
@@ -56,7 +56,7 @@ def parse_run_experiment_args():
     return parser.parse_args()
 
 def run_process(zipFile):
-    """ Process individual file with experiment_powerBalancing """
+    """ Process individual file with experiment_ """
     out_basename = os.path.basename(zipFile).split('.')[0] + f'_{exp_name}.npz'
     out_fullname = os.path.join(out_dir, out_basename)
     if os.path.exists(out_fullname):
