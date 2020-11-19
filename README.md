@@ -55,7 +55,10 @@ from s1denoise import Sentinel1Image
 # open access to file with S1 data
 s1 = Sentinel1Image('/path/to/data/S1B_EW_GRDM_1SDH_INPUTFILE.zip')
 
-# run thermal noise correction in HV polarisation
+# run thermal noise correction in HV polarisation with the default ESA algorithm
+s0hve = s1.thermalNoiseRemoval('HV', algorithm='ESA')
+
+# run thermal noise correction in HV polarisation with the NEW algorithm
 s0_hv = s1.thermalNoiseRemoval('HV')
 
 # run thermal and texture noise correction in HV polarisation
@@ -85,3 +88,6 @@ Process a single file using Docker (replace `input_dir` and `output_dir` with ac
 
 Sub-directories in `s1denoise/experimentalData` contain scripts for training the noise scaling and power balancing coefficients and extra scaling.
 See README files in these sub-dirs for details.
+
+## License
+The project is licensed under the GNU general public license version 3.
