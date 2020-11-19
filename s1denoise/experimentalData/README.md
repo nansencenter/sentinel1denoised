@@ -7,9 +7,9 @@ The directory contains generic scripts for working with coefficiens.
 It converts from two JSON files for S1A and S1B in old format into one file in new format.
 In the new format the dict structure is quite flat. There are only two levels. The root key defines
 platform, mode, resolution, polarisation, type of coefficient and IPF (e.g. `S1B_EW_GRDM_HV_NS_3.1`).
-The 2nd next level key defines sub-swath name (e.g. `EW1`).
+The 2nd level key defines sub-swath name (e.g. `EW1`).
 
-Coefficient can be access by:
+Coefficient can be accessed by:
 ```python
 import json
 with open('denoising_parameters.json') as f:
@@ -26,7 +26,9 @@ The script 'run_experiment.py' loops over a set of S1 Level 1 GRD files to get s
 each sub-block. Here is an example how to run it:
 
 ```
-python run_experiment.py ns S1A VH /path/to/L1/GRD/files /path/to/output/dir
+python run_experiment.py ns S1A VH /path/to/L1/GRD/files ./noiseScaling/
+
+python run_experiment.py pb S1A VH /path/to/L1/GRD/files ./powerBalancing/
 ```
 where the arguments:\
 1st - type of experiment (ns/pb)
@@ -42,10 +44,11 @@ See noiseScaling and powerBalancing directories
 
 ## 4. Update the main denoising_parameters.json file with values from an experiment:
 
-Once you have statistics for many files you can obtain statistically aggregated power balancing factors for each sub-swath by scrpit called 'analyze_experiment_powerBalancingParameters.py':
+Once you have aggregated statistics from many files you can update the main parameters JSON files:
 
 ```
-python update_parameter_file.py powerBalancing/S1B_EW_GRDM_1SDH_power_balancning.json ../denoising_parameters.json
+python update_parameter_file.py powerBalancing/S1B_EW_GRDM_1SDH_powerBalancning.json ../denoising_parameters.json
+python update_parameter_file.py noiseScaling/S1B_EW_GRDM_1SDH_noiseScaling.json ../denoising_parameters.json
 ```
 
 with the arguments:
@@ -53,6 +56,6 @@ with the arguments:
 1. name of the main parameters file
 
 It will take the averaged values from input file and put them into the main file. In addition it will
-create file `denoising_parameters_training_files.json` with lists of all training files sued in that experiment.
+create/update file `denoising_parameters_training_files.json` with lists of all training files sued in that experiment.
 
-Both `denoising_parameters.json` and `denoising_parameters_training_files.json` should be added to git.
+Both updated files `denoising_parameters.json` and `denoising_parameters_training_files.json` should be added to git.
