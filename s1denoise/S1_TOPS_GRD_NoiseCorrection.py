@@ -342,76 +342,63 @@ class Sentinel1Image(Nansat):
                         get_DOM_nodeValue(iList,[k],'float'))
         return calibrationVector
 
-    def import_denoisingCoefficients(self, polarization):
+    def import_denoisingCoefficients(self, polarization, load_extra_scaling=False):
         ''' Import denoising coefficients '''
-        satID = self.filename.split('/')[-1][:3]
+        filename_parts = os.path.basename(self.filename).split('_')
+        platform = filename_parts[0]
+        mode = filename_parts[1]
+        resolution = filename_parts[2]
         denoise_filename = os.path.join(
             os.path.dirname(os.path.realpath(__file__)),
-            'denoising_parameters_%s.json' % satID)
+            'denoising_parameters.json')
         with open(denoise_filename) as f:
-            denoParams = json.load(f)[polarization]
+            params = json.load(f)
+
         noiseScalingParameters = {}
         powerBalancingParameters = {}
         extraScalingParameters = {}
-        extraScalingParameters['SNR'] = []
         noiseVarianceParameters = {}
         IPFversion = float(self.IPFversion)
         sensingDate = datetime.strptime(self.filename.split('/')[-1].split('_')[4], '%Y%m%dT%H%M%S')
-        if satID=='S1B' and IPFversion==2.72 and sensingDate >= datetime(2017,1,16,13,42,34):
+        if platform=='S1B' and IPFversion==2.72 and sensingDate >= datetime(2017,1,16,13,42,34):
             # Adaption for special case.
             # ESA abrubtly changed scaling LUT in AUX_PP1 from 20170116 while keeping the IPFv.
             # After this change, the scaling parameters seems be much closer to those of IPFv 2.8.
             IPFversion = 2.8
+
+        base_key = f'{platform}_{mode}_{resolution}_{polarization}'
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             subswathID = '%s%s' % (self.obsMode, iSW)
-            if 'noiseScalingParameters' in denoParams.keys():
-                try:
-                    noiseScalingParameters[subswathID] = (
-                        denoParams['noiseScalingParameters'][subswathID]['%.1f' % IPFversion])
-                except:
-                    print('WARNING: noise scaling parameters for subswath %s (IPF:%s) is missing.'
-                          % (subswathID, self.IPFversion))
-                    noiseScalingParameters[subswathID] = 1.0
+
+            ns_key = f'{base_key}_NS_%0.1f' % IPFversion
+            if ns_key in params:
+                noiseScalingParameters[subswathID] = params[ns_key].get(subswathID, 1)
             else:
-                print('WARNING: noiseScalingParameters field is missing.')
-                noiseScalingParameters[subswathID] = 1.0
-            if 'powerBalancingParameters' in denoParams.keys():
-                try:
-                    powerBalancingParameters[subswathID] = (
-                        denoParams['powerBalancingParameters'][subswathID]['%.1f' % IPFversion])
-                except:
-                    print('WARNING: power balancing parameters for subswath %s (IPF:%s) is missing.'
-                          % (subswathID, self.IPFversion))
-                    powerBalancingParameters[subswathID] = 0.0
+                print(f'WARNING: noise scaling for {subswathID} (IPF:{IPFversion}) is missing.')
+
+            pb_key = f'{base_key}_PB_%0.1f' % IPFversion
+            if pb_key in params:
+                powerBalancingParameters[subswathID] = params[pb_key].get(subswathID, 0)
             else:
-                print('WARNING: powerBalancingParameters field is missing.')
-                powerBalancingParameters[subswathID] = 0.0
-            if 'extraScalingParameters' in denoParams.keys():
-                try:
-                    extraScalingParameters[subswathID] = (
-                        denoParams['extraScalingParameters'][subswathID])
-                    extraScalingParameters['SNR'] = (
-                        denoParams['extraScalingParameters']['SNNR'])
-                except:
-                    print('WARNING: extra scaling parameters for subswath %s (IPF:%s) is missing.'
-                          % (subswathID, self.IPFversion))
-                    extraScalingParameters['SNNR'] = np.linspace(-30,+30,601)
-                    extraScalingParameters[subswathID] = np.ones(601)
+                print(f'WARNING: power balancing for {subswathID} (IPF:{IPFversion}) is missing.')
+
+            if not load_extra_scaling:
+                continue
+            es_key = f'{base_key}_ES_%0.1f' % IPFversion
+            if es_key in params:
+                extraScalingParameters[subswathID] = params[es_key][subswathID]
+                extraScalingParameters['SNNR'] = params[es_key]['SNNR']
             else:
-                print('WARNING: extraScalingParameters field is missing.')
+                print(f'WARNING: extra scaling for {subswathID} (IPF:{IPFversion}) is missing.')
                 extraScalingParameters['SNNR'] = np.linspace(-30,+30,601)
                 extraScalingParameters[subswathID] = np.ones(601)
-            if 'noiseVarianceParameters' in denoParams.keys():
-                try:
-                    noiseVarianceParameters[subswathID] = (
-                        denoParams['noiseVarianceParameters'][subswathID] )
-                except:
-                    print('WARNING: noise variance parameters for subswath %s (IPF:%s) is missing.'
-                          % (subswathID, self.IPFversion))
-                    noiseVarianceParameters[subswathID] = 0.0
+
+            nv_key = f'{base_key}_NV_%0.1f' % IPFversion
+            if pb_key in params:
+                nv_key[subswathID] = params[nv_key].get(subswathID, 0)
             else:
-                print('WARNING: noiseVarianceParameters field is missing.')
-                noiseVarianceParameters[subswathID] = 0.0
+                print(f'WARNING: noise variance for {subswathID} (IPF:{IPFversion}) is missing.')
+
         return ( noiseScalingParameters, powerBalancingParameters, extraScalingParameters,
                  noiseVarianceParameters )
 
@@ -1127,7 +1114,7 @@ class Sentinel1Image(Nansat):
         subswathIndexMap = self.subswathIndexMap(polarization)
         # import coefficients
         noiseScalingParameters, powerBalancingParameters, extraScalingParameters = (
-            self.import_denoisingCoefficients(polarization)[:3])
+            self.import_denoisingCoefficients(polarization, localNoisePowerCompensation)[:3])
         # apply noise scaling and power balancing to noise-equivalent sigma nought
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             valid = (subswathIndexMap==iSW)
