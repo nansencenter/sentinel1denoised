@@ -13,7 +13,7 @@
 #     Park et al., 2019, IEEE TGRS 57(6):4040-4049. doi:10.1109/TGRS.2018.2889381
 
 
-import os, glob, warnings, zipfile, requests, subprocess
+import os, glob, json, warnings, zipfile, requests, subprocess
 from collections import defaultdict
 from datetime import datetime, timedelta
 from xml.dom.minidom import parse, parseString
@@ -345,9 +345,11 @@ class Sentinel1Image(Nansat):
     def import_denoisingCoefficients(self, polarization):
         ''' Import denoising coefficients '''
         satID = self.filename.split('/')[-1][:3]
-        denoParams = np.load(os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             'denoising_parameters_%s.npz' % satID),
-                             allow_pickle=True)[polarization].item()
+        denoise_filename = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            'denoising_parameters_%s.json' % satID)
+        with open(denoise_filename) as f:
+            denoParams = json.load(f)[polarization]
         noiseScalingParameters = {}
         powerBalancingParameters = {}
         extraScalingParameters = {}
