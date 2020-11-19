@@ -1,6 +1,6 @@
 The directory contains generic scripts for working with coefficiens.
 
-##1. Convert from old format (needed only once):
+## 1. Convert from old format (needed only once):
 
 `python convert_old_parameters.py`
 
@@ -20,7 +20,7 @@ ew1_pb = par['S1B_EW_GRDM_HV_PB_3.1']['EW1']
 ```
 
 
-##2. Processing individual S1 GRD files with noise scaling and power balancing experiments
+## 2. Processing individual S1 GRD files with noise scaling and power balancing experiments
 
 The script 'run_experiment.py' loops over a set of S1 Level 1 GRD files to get statistics for
 each sub-block. Here is an example how to run it:
@@ -36,11 +36,11 @@ where the arguments:\
 5th - path to output npz files with statistics in sub-blocks
 
 
-##3. Aggreagate statistics from individual NPZ files
+## 3. Aggreagate statistics from individual NPZ files
 
 See noiseScaling and powerBalancing directories
 
-##4. Update the main denoising_parameters.json file with values from an experiment:
+## 4. Update the main denoising_parameters.json file with values from an experiment:
 
 Once you have statistics for many files you can obtain statistically aggregated power balancing factors for each sub-swath by scrpit called 'analyze_experiment_powerBalancingParameters.py':
 
