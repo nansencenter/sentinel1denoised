@@ -9,7 +9,7 @@ See ../run_experiment.py
 
 ## Step 2. Statistical aggregation
 
-Once you have statistics for many files you can obtain statistically aggregated power balancing
+Once you have statistics for many files you can obtain statistically aggregated noise scaling
 factors for each sub-swath by scrpit called 'analyze_experiment_noiseScalingParameters.py':
 
 ```
