@@ -20,12 +20,12 @@ def parse_args():
 
 def safe_load(input_file):
     """ Load JSON file or make empty dict """
-    with open(input_file, 'rt') as f:
-        try:
+    try:
+        with open(input_file, 'rt') as f:
             result = json.load(f)
-        except:
-            print(f'Invalid data in {input_file}')
-            result = {}
+    except:
+        print(f'Invalid data in {input_file}')
+        result = {}
     return result
 
 def main():
@@ -40,7 +40,7 @@ def main():
         if ipf_key not in out_files:
             out_files[ipf_key] = {}
         for swath in inp_par[ipf_key]['mean']:
-            print(ipf_key, swath, inp_par[ipf_key]['mean'][swath], out_par[ipf_key][swath])
+            #print(ipf_key, swath, inp_par[ipf_key]['mean'][swath], out_par[ipf_key][swath])
             out_par[ipf_key][swath] = inp_par[ipf_key]['mean'][swath]
             out_files[ipf_key] = inp_par[ipf_key]['files']
 
