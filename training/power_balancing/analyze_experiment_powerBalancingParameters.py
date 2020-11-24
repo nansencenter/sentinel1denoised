@@ -91,7 +91,7 @@ class AnalyzePowerBalancing(AnalyzeExperiment):
                 pb_params[ipf_key]['mean'][self.swath_names[iSW]] = fitResults[0]
                 pb_params[ipf_key]['rmse'][self.swath_names[iSW]] = np.sqrt(np.sum((fitResults[0]-bp)**2 * w) / np.sum(w))
             valid_npz_files = list(set([npz_files_per_block[i] for i in np.where(valid)[0]]))
-            pb_params[ipf_key]['files'] = self.npzFiles
+            pb_params[ipf_key]['files'] = valid_npz_files
 
         self.save(pb_params)
 
