@@ -91,7 +91,7 @@ class AnalyzeNoseScaling(AnalyzeExperiment):
                 ns_params[ipf_key]['mean'][iSW] = fitResults[0]
                 ns_params[ipf_key]['rmse'][iSW] = np.sqrt(np.sum((fitResults[0]-sf)**2 * w) / np.sum(w))
                 valid_npz_files = list(set([npz_files_per_block[i] for i in np.where(valid)[0]]))
-                ns_params[ipf_key]['files'] = self.npzFiles
+                ns_params[ipf_key]['files'] = valid_npz_files
 
                 noiseScalingParameters[iSW]['%.1f' % IPFv] = fitResults[0]
                 noiseScalingParametersRMSE[iSW]['%.1f' % IPFv] = np.sqrt(np.sum((fitResults[0]-sf)**2 * w) / np.sum(w))
