@@ -24,7 +24,7 @@ setup(
     scripts=[
         's1denoise/scripts/s1_correction.py',
         's1denoise/scripts/s1_thermal_denoise.py'],
-    package_data={'s1denoise' :['*.npz']},
+    package_data={'s1denoise' :['denoising_parameters.json']},
     install_requires=[
         'nansat',
         'scipy',
