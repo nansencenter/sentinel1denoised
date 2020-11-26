@@ -8,18 +8,25 @@
             txt file with LATEX rable
 
 """
+import argparse
+import glob
+import json
+import os
 
+import latextable
 import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
-from s1denoise import Sentinel1Image
 import numpy as np
-import os
-import glob
-import argparse
 from tabulate import tabulate
 from texttable import Texttable
-import latextable
+
+from s1denoise import Sentinel1Image
+
+POL_MODES = {
+    'HV': '1SDH',
+    'VH': '1SDV',
+}
 
 def parse_run_experiment_args():
     """ Parse input args for run_experiment_* scripts """
@@ -31,22 +38,24 @@ def parse_run_experiment_args():
                         help='Number of cores for parallel computation')
     return parser.parse_args()
 
-def generate_latex_table(data_esa, data_nersc, print_RQM = True):
+def generate_latex_table(tab_out_fname, data_esa, data_nersc, print_RQM=True):
     """
-    :param data_esa: npz file with RQM for ESA data
-    :param data_nersc: npz file with RQM for NERSC data
+    Compute average and std values of RQM, create latex table
+
+    :param tab_out_fname: filename to output table
+    :param data_esa: json filename with RQM for ESA data
+    :param data_nersc: json filename with RQM for NERSC data
     :param print_RQM: print RQM in the LATEX table
-    :return:
+
+    :return mean_esa: mean RQM for ESA
+    :return mean_nersc: mean RQM for NERSC
+    :return std_esa: std RQM for ESA
+    :return std_nersc: std RQM for NERSC
+
     """
-
-    data_esa = np.load(data_esa)
-    data_nersc = np.load(data_nersc)
-
-    data_esa.allow_pickle = True
-    data_nersc.allow_pickle = True
-
-    d_esa = {key: data_esa[key].item() for key in data_esa}
-    d_nersc = {key: data_nersc[key].item() for key in data_nersc}
+    with open(data_esa, 'rt') as esaf, open(data_nersc, 'rt') as nerscf:
+        d_esa = json.load(esaf)
+        d_nersc = json.load(nerscf)
 
     print('\n%s %s\n' % (d_esa, d_nersc))
 
@@ -95,7 +104,7 @@ def generate_latex_table(data_esa, data_nersc, print_RQM = True):
     #print(tabulate(rows, headers='firstrow', tablefmt='latex'))
 
     # Save table to file
-    with open('%s/%s_table.txt' % (out_dir, os.path.basename(s1_path)), 'w') as f:
+    with open(tab_out_fname, 'wt') as f:
         f.write(tabulate(rows, headers='firstrow', tablefmt='latex'))
 
     #print('\nTexttable Latex:')
@@ -103,10 +112,20 @@ def generate_latex_table(data_esa, data_nersc, print_RQM = True):
 
     return np.nanmean(total_mean_esa), np.nanmean(total_mean_nersc), np.nanstd(total_mean_esa), np.nanstd(total_mean_nersc)
 
-def plot_results(imode, mean_esa, mean_nersc, std_esa, std_nersc):
+def plot_results(png_out_fname, mean_esa, mean_nersc, std_esa, std_nersc):
+    """
+    Generate PNG file with bar / errorbar plot
+
+    :param png_out_fname: filename to output table
+    :param mean_esa: mean RQM for ESA
+    :param mean_nersc: mean RQM for NERSC
+    :param std_esa: std RQM for ESA
+    :param std_nersc: std RQM for NERSC
+
+    """
     materials = ['ESA', 'NERSC']
     plt.clf()
-    title = '%s RQM mean/RQM std' % os.path.basename(s1_path)
+    title = '%s RQM mean/RQM std' % png_out_fname
 
     # Create lists for the plot
     x_pos = np.arange(len(materials))
@@ -122,21 +141,22 @@ def plot_results(imode, mean_esa, mean_nersc, std_esa, std_nersc):
     ax.set_title(title)
     ax.yaxis.grid(True)
 
-    # Save the figure and show
+    # Save the figure and close
     plt.tight_layout()
-    plt.savefig('%s/%s_ESA_RQM.png' % (out_dir, os.path.basename(s1_path)), bbox_inches='tight', dpi=300)
+    plt.savefig(png_out_fname, bbox_inches='tight', dpi=300)
+    plt.close()
+
 
 args = parse_run_experiment_args()
-s1_path = args.s1_path
-out_dir = args.out_dir
-polarization = args.polarization
 
-pol_modes = {
-    'HV': '1SDH',
-    'VH': '1SDV',
-}
+out_prefix = os.path.join(args.out_dir, '%s' % os.path.basename(args.s1_path))
+esa_out_fname = f'{out_prefix}_ESA_RQM.json'
+nersc_out_fname = f'{out_prefix}_NERSC_RQM.json'
+png_out_fname = f'{out_prefix}_NERSC_ESA_RQM.png'
+tab_out_fname = f'{out_prefix}_table.png'
 
-ffiles = glob.glob('%s/*%s*.zip' % (s1_path, pol_modes[polarization]))
+ffiles_mask = os.path.join(args.s1_path, '*%s*.zip' % POL_MODES[args.polarization])
+ffiles = sorted(glob.glob(ffiles_mask))
 
 # make directory for output npz files
 os.makedirs(args.out_dir, exist_ok=True)
@@ -152,7 +172,7 @@ for fname in ffiles:
 
 # Open first file to get keys of result
 s1 = Sentinel1Image(ffiles[0])
-res_qam = s1.qualityAssesment(polarization)
+res_qam = s1.qualityAssesment(args.polarization)
 keys = list(res_qam['QAM_ESA'].keys())
 
 for id_key in list(d_res_esa.keys()):
@@ -163,22 +183,21 @@ for id_key in list(d_res_esa.keys()):
 for fname in ffiles:
     id_name = os.path.basename(fname).split('.')[0]
     s1 = Sentinel1Image(fname)
-    res_qam = s1.qualityAssesment(polarization)
+    res_qam = s1.qualityAssesment(args.polarization)
     keys = list(res_qam['QAM_ESA'].keys())
     for k in keys:
         d_res_esa[id_name][k].append(res_qam['QAM_ESA'][k])
         d_res_nersc[id_name][k].append(res_qam['QAM_NERSC'][k])
 
-esa_out_fname = '%s/%s_ESA_RQM.npz' % (out_dir, os.path.basename(s1_path))
-nersc_out_fname = '%s/%s_NERSC_RQM.npz' % (out_dir, os.path.basename(s1_path))
 
-np.savez(esa_out_fname, **d_res_esa)
-np.savez(nersc_out_fname, **d_res_nersc)
+with open(esa_out_fname, 'wt') as fesa, open(nersc_out_fname, 'wt') as fnersc:
+    json.dump(d_res_esa, fesa)
+    json.dump(d_res_nersc, fnersc)
 
 # Create LATEX table from obtained results
-mean_esa, mean_nersc, std_esa, std_nersc = generate_latex_table(esa_out_fname, nersc_out_fname, print_RQM = True)
+mean_esa, mean_nersc, std_esa, std_nersc = generate_latex_table(tab_out_fname, esa_out_fname, nersc_out_fname, print_RQM=True)
 
 # Plot error bars
-plot_results(os.path.basename(s1_path),mean_esa, mean_nersc, std_esa, std_nersc)
+plot_results(png_out_fname, mean_esa, mean_nersc, std_esa, std_nersc)
 
 
