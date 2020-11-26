@@ -16,7 +16,7 @@ swath2res = {
 
 new_par = {}
 for platform in ['S1A', 'S1B']:
-    ifile = f'../denoising_parameters_{platform}.json'
+    ifile = f'denoising_parameters_{platform}.json'
 
     with open(ifile, 'rt') as f:
         old_par = json.load(f)
