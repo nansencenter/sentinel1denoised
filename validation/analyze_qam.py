@@ -155,12 +155,12 @@ def compute_mean_rqm(data_esa, data_nersc):
     esa_mean = np.nanmean(total_mean_esa)
     nersc_mean = np.nanmean(total_mean_nersc)
     esa_std = np.nanstd(total_mean_esa)
-    nersc_std = np.nanmean(total_mean_nersc)
+    nersc_std = np.nanstd(total_mean_nersc)
 
     # Calculate mean difference
     diff = np.array(total_mean_esa) - np.array(total_mean_nersc)
     diff_mean = np.nanmean(diff)
-    diff_std_ = np.nanmean(diff)
+    diff_std_ = np.nanstd(diff)
 
     return esa_mean, esa_std, nersc_mean, nersc_std, diff_mean, diff_std_
 
