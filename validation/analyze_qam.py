@@ -130,6 +130,40 @@ def plot_results(mean_esa, mean_nersc, std_esa, std_nersc, mean_diff, mean_diff_
     plt.tight_layout()
     plt.savefig('%s/%s_RQM.png' % (out_path, data_name), bbox_inches='tight', dpi=300)
 
+def compute_mean_rqm(data_esa, data_nersc):
+    """Function to compute mean values for RQM
+    :param data_esa: json file with RQM for ESA data
+    :param data_nersc: json file with RQM for NERSC data
+    :return: mean and STD values for ESA, NERSC data and their difference
+    """
+
+    total_mean_esa = []
+    total_mean_nersc = []
+
+    with open(data_esa) as esa_json_file:
+        d_esa = json.load(esa_json_file)
+
+    with open(data_nersc) as nersc_json_file:
+        d_nersc = json.load(nersc_json_file)
+
+    for i, sar_id in enumerate(d_esa):
+        mean_esa = d_esa[sar_id]['Mean'][0]
+        mean_nersc = d_nersc[sar_id]['Mean'][0]
+        total_mean_esa.append(mean_esa)
+        total_mean_nersc.append(mean_nersc)
+
+    esa_mean = np.nanmean(total_mean_esa)
+    nersc_mean = np.nanmean(total_mean_nersc)
+    esa_std = np.nanstd(total_mean_esa)
+    nersc_std = np.nanmean(total_mean_nersc)
+
+    # Calculate mean difference
+    diff = np.array(total_mean_esa) - np.array(total_mean_nersc)
+    diff_mean = np.nanmean(diff)
+    diff_std_ = np.nanmean(diff)
+
+    return esa_mean, esa_std, nersc_mean, nersc_std, diff_mean, diff_std_
+
 args = parse_run_experiment_args()
 
 ffiles_mask_esa = os.path.join(args.json_path, '*ESA*RQM*.json')
