@@ -158,6 +158,7 @@ class Sentinel1Image(Nansat):
                  'IW_GRDH_1SDH, IW_GRDH_1SDV, EW_GRDM_1SDH, or EW_GRDM_1SDV product.' )
         self.platform = self.filename.split('/')[-1][:3]    # S1A or S1B
         self.obsMode = self.filename.split('/')[-1][4:6]    # IW or EW
+        self.swath_ids = range(1, {'IW':3, 'EW':5}[self.obsMode]+1)
         txPol = self.filename.split('/')[-1][15]    # H or V
         self.annotationXML = {}
         self.calibrationXML = {}
@@ -264,7 +265,7 @@ class Sentinel1Image(Nansat):
                                  'incidenceAngle':[],
                                  'terrainHeight':[],
                                  'roll':[] }
-                           for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
+                           for li in self.swath_ids }
         for iList in antennaPatternList:
             swath = get_DOM_nodeValue(iList,['swath'])
             for k in antennaPattern[swath].keys():
@@ -284,7 +285,7 @@ class Sentinel1Image(Nansat):
                                                'azimuthAntennaElementPattern':[],
                                                'absoluteCalibrationConstant':[],
                                                'noiseCalibrationFactor':[] }
-                                         for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
+                                         for li in self.swath_ids }
         for iList in calParamsList:
             swath = get_DOM_nodeValue(iList,['swath'])
             pol = get_DOM_nodeValue(iList,['polarisation'])
@@ -367,7 +368,7 @@ class Sentinel1Image(Nansat):
             IPFversion = 2.8
 
         base_key = f'{platform}_{mode}_{resolution}_{polarization}'
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             subswathID = '%s%s' % (self.obsMode, iSW)
 
             ns_key = f'{base_key}_NS_%0.1f' % IPFversion
@@ -410,7 +411,7 @@ class Sentinel1Image(Nansat):
                                           'elevationAntennaPattern':[],
                                           'absoluteCalibrationConstant':[],
                                           'noiseCalibrationFactor':[] }
-                                    for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
+                                    for li in self.swath_ids }
         for iList in calParamsList:
             swath = get_DOM_nodeValue(iList,['swath'])
             pol = get_DOM_nodeValue(iList,['polarisation'])
@@ -467,7 +468,7 @@ class Sentinel1Image(Nansat):
                                      'lastRangeSample':[],
                                      'line':[],
                                      'noiseAzimuthLut':[] }
-                               for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
+                               for li in self.swath_ids }
         # ESA changed the noise vector structure from IPFv 2.9 to include azimuth variation
         if self.IPFversion < 2.9:
             noiseVectorList = self.noiseXML[polarization].getElementsByTagName('noiseVector')
@@ -482,7 +483,7 @@ class Sentinel1Image(Nansat):
                 # To keep consistency, noiseLut is stored as noiseRangeLut
                 noiseRangeVector['noiseRangeLut'].append(
                     get_DOM_nodeValue(iList,['noiseLut'],'float'))
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in self.swath_ids:
                 swath = self.obsMode + str(iSW)
                 noiseAzimuthVector[swath]['firstAzimuthLine'].append(0)
                 noiseAzimuthVector[swath]['firstRangeSample'].append(0)
@@ -554,7 +555,7 @@ class Sentinel1Image(Nansat):
                               'firstRangeSample':[],
                               'lastAzimuthLine':[],
                               'lastRangeSample':[] }
-                        for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
+                        for li in self.swath_ids }
         for iList1 in swathMergeList:
             swath = get_DOM_nodeValue(iList1,['swath'])
             swathBoundsList = iList1.getElementsByTagName('swathBounds')
@@ -657,7 +658,7 @@ class Sentinel1Image(Nansat):
         ''' Range center pixel indices along azimuth for each subswath '''
         swathBounds = self.import_swathBounds(polarization)
         subswathCenterSampleIndex = {}
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             subswathID = '%s%s' % (self.obsMode, iSW)
             numberOfLines = (   np.array(swathBounds[subswathID]['lastAzimuthLine'])
                               - np.array(swathBounds[subswathID]['firstAzimuthLine']) + 1 )
@@ -674,7 +675,7 @@ class Sentinel1Image(Nansat):
         subswathIndexMap = self.subswathIndexMap(polarization)
         calibrationVectorMap = np.ones(self.shape()) * np.nan
         # subswath-wise processing is required
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             swathBound = swathBounds['%s%s' % (self.obsMode, iSW)]
             line = np.array(calibrationVector['line'])
             valid = (   (line >= min(swathBound['firstAzimuthLine']))
@@ -746,7 +747,7 @@ class Sentinel1Image(Nansat):
         ''' Generate roll angle interpolator '''
         antennaPattern = self.import_antennaPattern(polarization)
         relativeAzimuthTime = []
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             subswathID = '%s%s' % (self.obsMode, iSW)
             relativeAzimuthTime.append([ (t-self.time_coverage_center).total_seconds()
                                          for t in antennaPattern[subswathID]['azimuthTime'] ])
@@ -754,7 +755,7 @@ class Sentinel1Image(Nansat):
         sortIndex = np.argsort(relativeAzimuthTime)
         if source=='annotated':
             rollAngle = []
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in self.swath_ids:
                 subswathID = '%s%s' % (self.obsMode, iSW)
                 rollAngle.append(antennaPattern[subswathID]['roll'])
             relativeAzimuthTime = np.hstack(relativeAzimuthTime)
@@ -801,7 +802,7 @@ class Sentinel1Image(Nansat):
         subswathIndexMap = self.subswathIndexMap(polarization)
         elevationAntennaPatternMap = np.ones(self.shape())
         elevationAntennaPatternLUT = self.import_elevationAntennaPattern(polarization)
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             subswathID = '%s%s' % (self.obsMode, iSW)
             recordLength = len(elevationAntennaPatternLUT[subswathID]['elevationAntennaPattern'])/2
             angleLUT = ( np.arange(-(recordLength//2),+(recordLength//2)+1)
@@ -856,7 +857,7 @@ class Sentinel1Image(Nansat):
                 'elevationAngle')
             elevationAntennaPatternIntp = self.elevationAntennaPatternInterpolator(polarization)
             rangeSpreadingLossIntp = self.rangeSpreadingLossInterpolator(polarization)
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in self.swath_ids:
                 subswathID = '%s%s' % (self.obsMode, iSW)
                 swathBound = swathBounds[subswathID]
                 line = np.array(noiseRangeVector['line'])
@@ -913,7 +914,7 @@ class Sentinel1Image(Nansat):
                 noiseVectorMap[valid] = interpFunc(np.arange(self.shape()[1]),
                                                    np.arange(self.shape()[0])).T[valid]
         else:
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in self.swath_ids:
                 subswathID = '%s%s' % (self.obsMode, iSW)
                 swathBound = swathBounds[subswathID]
                 line = np.array(noiseRangeVector['line'])
@@ -939,7 +940,7 @@ class Sentinel1Image(Nansat):
                 noiseVectorMap[valid] = interpFunc(np.arange(self.shape()[1]),
                                                    np.arange(self.shape()[0])).T[valid]
         # interpolate azimuth vectors
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             subswathID = '%s%s' % (self.obsMode, iSW)
             numberOfBlocks = len(noiseAzimuthVector[subswathID]['firstAzimuthLine'])
             for iBlk in range(numberOfBlocks):
@@ -961,7 +962,7 @@ class Sentinel1Image(Nansat):
         ''' Convert subswath indices into full grid pixels '''
         subswathIndexMap = np.zeros(self.shape(), dtype=np.uint8)
         swathBounds = self.import_swathBounds(polarization)
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             swathBound = swathBounds['%s%s' % (self.obsMode, iSW)]
             zipped = zip(swathBound['firstAzimuthLine'],
                          swathBound['firstRangeSample'],
@@ -989,7 +990,7 @@ class Sentinel1Image(Nansat):
                 'IW1':59658.3803, 'IW2':52734.43872, 'IW3':59758.6889,
                 'EW1':56065.87, 'EW2':56559.76, 'EW3':44956.39, 'EW4':46324.29, 'EW5':43505.68 }
             subswathIndexMap = self.subswathIndexMap(polarization)
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in self.swath_ids:
                 valid = (subswathIndexMap==iSW)
                 noiseEquivalentSigma0[valid] *= ( {'IW':474, 'EW':1087}[self.obsMode]**2
                     * noiseCalibrationFactor['%s%s' % (self.obsMode, iSW)] )
@@ -1013,7 +1014,7 @@ class Sentinel1Image(Nansat):
         # see section III.A of the reference, R1.
         subswathIndexMap = self.subswathIndexMap(polarization)
         scallopingGainMap = np.ones(self.shape()) * np.nan
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             subswathID = '%s%s' % (self.obsMode, iSW)
             # azimuth antenna element patterns (AAEP) lookup table for given subswath
             AAEP = self.import_azimuthAntennaElementPattern(polarization)[subswathID]
@@ -1094,7 +1095,7 @@ class Sentinel1Image(Nansat):
         meanNEsigma0 = convolve(noiseEquivalentSigma0, weights, mode='constant', cval=0.0 )
         meanSWindex = convolve(subswathIndexMap, weights, mode='constant', cval=0.0 )
         SNR = 10 * np.log10(meanSigma0 / meanNEsigma0 - 1)
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             interpFunc = InterpolatedUnivariateSpline(extraScalingParameters['SNR'],
                 extraScalingParameters['%s%s' % (self.obsMode, iSW)], k=3)
             valid = np.isfinite(SNR) * (meanSWindex==iSW)
@@ -1102,31 +1103,37 @@ class Sentinel1Image(Nansat):
             noiseEquivalentSigma0[valid] = noiseEquivalentSigma0[valid] * yInterp
         return noiseEquivalentSigma0
 
-    def modifiedNoiseEquivalentSigma0Map(self, polarization, localNoisePowerCompensation=False):
-        ''' Get noise power-scaled and interswath power-balanced noise equivalent sigma nought '''
-        # see section III of the reference, R1.
-        # raw noise-equivalent sigma nought
-        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization, lutShift=True)
+    def modifyNoiseEquivalentSigma0Map(self, noiseEquivalentSigma0, polarization,
+        localNoisePowerCompensation=False):
+        """ Modify the input raw noise Equivalent Sigma0
+        See section III of the reference, R1.
+        """
+        newNoiseEquivalentSigma0 = np.array(noiseEquivalentSigma0)
         # apply scalloping gain to noise-equivalent sigma nought
         if self.IPFversion >= 2.5 and self.IPFversion < 2.9:
-            noiseEquivalentSigma0 *= self.scallopingGainMap(polarization)
+            newNoiseEquivalentSigma0 *= self.scallopingGainMap(polarization)
         # subswath index map
         subswathIndexMap = self.subswathIndexMap(polarization)
         # import coefficients
         noiseScalingParameters, powerBalancingParameters, extraScalingParameters = (
             self.import_denoisingCoefficients(polarization, localNoisePowerCompensation)[:3])
         # apply noise scaling and power balancing to noise-equivalent sigma nought
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             valid = (subswathIndexMap==iSW)
-            noiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
-            noiseEquivalentSigma0[valid] += powerBalancingParameters['%s%s' % (self.obsMode, iSW)]
+            newNoiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
+            newNoiseEquivalentSigma0[valid] += powerBalancingParameters['%s%s' % (self.obsMode, iSW)]
         # apply extra noise scaling to compensate for local residual noise power
         if localNoisePowerCompensation and (polarization=='HV' or polarization=='VH'):
             sigma0 = self.rawSigma0Map(polarization)
-            noiseEquivalentSigma0 = self.adaptiveNoiseScaling(
-                sigma0, noiseEquivalentSigma0, subswathIndexMap, extraScalingParameters, 5)
-        return noiseEquivalentSigma0
+            newNoiseEquivalentSigma0 = self.adaptiveNoiseScaling(
+                sigma0, newNoiseEquivalentSigma0, subswathIndexMap, extraScalingParameters, 5)
+        return newNoiseEquivalentSigma0
 
+    def modifiedNoiseEquivalentSigma0Map(self, polarization, localNoisePowerCompensation=False):
+        ''' Get noise power-scaled and interswath power-balanced noise equivalent sigma nought '''
+        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization, lutShift=True)
+        return self.modifyNoiseEquivalentSigma0Map(noiseEquivalentSigma0, polarization,
+            localNoisePowerCompensation)
 
     def thermalNoiseRemoval(self, polarization, algorithm='NERSC',
             localNoisePowerCompensation=False, preserveTotalPower=False, returnNESZ=False):
@@ -1233,7 +1240,7 @@ class Sentinel1Image(Nansat):
                           'scalingFactor':[],
                           'correlationCoefficient':[],
                           'fitResidual':[] }
-                    for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
+                    for li in self.swath_ids }
         results['IPFversion'] = self.IPFversion
         for iBlk in range(len(blockBounds)-1):
             if landmask[blockBounds[iBlk]:blockBounds[iBlk+1]].sum() != 0:
@@ -1243,7 +1250,7 @@ class Sentinel1Image(Nansat):
             blockN0 = noiseEquivalentSigma0[blockBounds[iBlk]:blockBounds[iBlk+1],:]
             blockSWI = subswathIndexMap[blockBounds[iBlk]:blockBounds[iBlk+1],:]
             pixelValidity = (np.nanmean(blockS0 - blockN0 * 0.5, axis=0) > 0)
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in self.swath_ids:
                 subswathID = '%s%s' % (self.obsMode, iSW)
                 pixelIndex = np.nonzero((blockSWI==iSW).sum(axis=0) * pixelValidity)[0][cPx:-cPx]
                 if pixelIndex.sum()==0:
@@ -1290,9 +1297,8 @@ class Sentinel1Image(Nansat):
         ''' Generate experimental data for interswath power balancing parameter optimization '''
         # see section III.C of the reference, R1.
         cPx = {'IW':100, 'EW':25}[self.obsMode]    # clip size of side pixels, 1km
-        num_swaths = {'IW':3, 'EW':5}[self.obsMode]
-        swath_ids = range(1, num_swaths+1)
-        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in swath_ids]
+        num_swaths = len(self.swath_ids)
+        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
 
         subswathIndexMap = self.subswathIndexMap(polarization)
         landmask = self.landmask(skipGCP=4)
@@ -1303,7 +1309,7 @@ class Sentinel1Image(Nansat):
         rawNoiseEquivalentSigma0 = noiseEquivalentSigma0.copy()
         noiseScalingParameters = self.import_denoisingCoefficients(polarization)[0]
 
-        for iSW, swath_name in zip(swath_ids, swath_names):
+        for iSW, swath_name in zip(self.swath_ids, swath_names):
             valid = (subswathIndexMap==iSW)
             noiseEquivalentSigma0[valid] *= noiseScalingParameters[swath_name]
 
@@ -1330,7 +1336,7 @@ class Sentinel1Image(Nansat):
 
             fitCoefficients = []
             # Loop over sub-blocks within a block (block divided by sub-swath parts)
-            for iSW, name in zip(swath_ids, swath_names):
+            for iSW, name in zip(self.swath_ids, swath_names):
                 pixelIndex = np.nonzero((blockSWI==iSW).sum(axis=0) * pixelValidity)[0][cPx:-cPx]
                 if pixelIndex.sum()==0:
                     continue
@@ -1357,7 +1363,7 @@ class Sentinel1Image(Nansat):
                 balancingPower[li+1] = power2 - power1
             balancingPower = np.cumsum(balancingPower)
 
-            for iSW in swath_ids:
+            for iSW in self.swath_ids:
                 valid = (blockSWI==iSW)
                 blockN0[valid] += balancingPower[iSW-1]
             #powerBias = np.nanmean(blockRN0-blockN0)
@@ -1365,7 +1371,7 @@ class Sentinel1Image(Nansat):
             balancingPower += powerBias
             blockN0 += powerBias
 
-            for iSW, name in zip(swath_ids, swath_names):
+            for iSW, name in zip(self.swath_ids, swath_names):
                 results[name]['balancingPower'].append(balancingPower[iSW-1])
 
         np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
@@ -1397,11 +1403,11 @@ class Sentinel1Image(Nansat):
         results = { 'extraScalingFactorHistogram':
                         { '%s%s' % (self.obsMode, li):
                               np.zeros((len(windowSizes), nBins, nBins), dtype=np.int64)
-                          for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1)},
+                          for li in self.swath_ids},
                     'noiseNormalizedStandardDeviationHistogram':
                         { '%s%s' % (self.obsMode, li):
                               np.zeros((len(windowSizes), nBins, nBins), dtype=np.int64)
-                          for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1)} }
+                          for li in self.swath_ids} }
         results['IPFversion'] = self.IPFversion
         results['windowSizes'] = windowSizes
         results['snnrEdges'] = np.linspace(snnrRange[0], snnrRange[-1], nBins+1)
@@ -1424,7 +1430,7 @@ class Sentinel1Image(Nansat):
             extraScalingFactor = 1 + ( (sumZeroClippedSignal-sumSignal) / sumNoise
                                        * (windowSize**2 / numberOfPositives) )
             extraScalingFactor[numberOfPositives==0] = np.nan
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in self.swath_ids:
                 subswathID = '%s%s' % (self.obsMode, iSW)
                 valid = (abs(meanSubswathIndexMap - iSW) < (1/windowSize/2))
                 valid[:cPx,:] = False
@@ -1521,7 +1527,7 @@ class Sentinel1Image(Nansat):
             noiseVarianceParameters = self.import_denoisingCoefficients(polarization)[3]
             nanMask = np.isnan(sigma0)
             # subswath-wise processing
-            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            for iSW in self.swath_ids:
                 # rectangularize subswath data
                 ai, ri = np.where(subswathIndexMap==iSW)
                 aiMin, aiMax, riMin, riMax = ai.min(), ai.max(), ri.min(), ri.max()
@@ -1602,12 +1608,14 @@ class Sentinel1Image(Nansat):
 
         d_s0_nesz = {}
         d_s0_nesz['src'] = self.path
-        d_s0_nesz['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
+        #d_s0_nesz['inc'] = np.nanmean(self.incidenceAngleMap(polarization=polarization), axis=0)
         sz = self.rawSigma0Map(polarization=polarization)
         sz[sz == 0] = np.nan
         d_s0_nesz['sz'] = sz
         d_s0_nesz['nesz_esa'] = self.rawNoiseEquivalentSigma0Map(polarization=polarization)
-        d_s0_nesz['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization)
+        d_s0_nesz['nesz_nersc'] = self.modifyNoiseEquivalentSigma0Map(
+            d_s0_nesz['nesz_esa'],
+            polarization=polarization)
         return d_s0_nesz
 
     def qualityAssesment(self, polarization, num_px = 100):
@@ -1647,7 +1655,7 @@ class Sentinel1Image(Nansat):
         results = {'QAM_ESA': {}, 'QAM_NERSC': {}}
 
         print('\nDenoise evaluation...\n')
-        for li in range(1, {'IW': 3, 'EW': 5}[self.obsMode]):
+        for li in self.swath_ids:
             print('\n\n%s%s-%s%s' % (self.obsMode, li, self.obsMode, li+1))
             subswath_name = '%s%s' % (self.obsMode, li)
             # globals()[var_name] = var_name
