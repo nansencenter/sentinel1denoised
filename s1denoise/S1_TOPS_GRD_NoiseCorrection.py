@@ -852,6 +852,7 @@ class Sentinel1Image(Nansat):
         noiseVectorMap = np.ones(self.shape()) * np.nan
         # interpolate range vectors
         if lutShift:
+            print("lutShift applied")
             cPx = 150    # clip size of side pixels
             annotatedElevationAngleIntp = self.geolocationGridPointInterpolator(polarization,
                 'elevationAngle')
@@ -1103,37 +1104,32 @@ class Sentinel1Image(Nansat):
             noiseEquivalentSigma0[valid] = noiseEquivalentSigma0[valid] * yInterp
         return noiseEquivalentSigma0
 
-    def modifyNoiseEquivalentSigma0Map(self, noiseEquivalentSigma0, polarization,
-        localNoisePowerCompensation=False):
-        """ Modify the input raw noise Equivalent Sigma0
-        See section III of the reference, R1.
-        """
-        newNoiseEquivalentSigma0 = np.array(noiseEquivalentSigma0)
+    def modifiedNoiseEquivalentSigma0Map(self, polarization,
+        localNoisePowerCompensation=False,
+        lutShift=True, **kwargs):
+        ''' Get noise power-scaled and interswath power-balanced noise equivalent sigma nought '''
+        # see section III of the reference, R1.
+        # raw noise-equivalent sigma nought
+        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization, lutShift=lutShift)
         # apply scalloping gain to noise-equivalent sigma nought
         if self.IPFversion >= 2.5 and self.IPFversion < 2.9:
-            newNoiseEquivalentSigma0 *= self.scallopingGainMap(polarization)
+            noiseEquivalentSigma0 *= self.scallopingGainMap(polarization)
         # subswath index map
         subswathIndexMap = self.subswathIndexMap(polarization)
         # import coefficients
         noiseScalingParameters, powerBalancingParameters, extraScalingParameters = (
             self.import_denoisingCoefficients(polarization, localNoisePowerCompensation)[:3])
         # apply noise scaling and power balancing to noise-equivalent sigma nought
-        for iSW in self.swath_ids:
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             valid = (subswathIndexMap==iSW)
-            newNoiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
-            newNoiseEquivalentSigma0[valid] += powerBalancingParameters['%s%s' % (self.obsMode, iSW)]
+            noiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
+            noiseEquivalentSigma0[valid] += powerBalancingParameters['%s%s' % (self.obsMode, iSW)]
         # apply extra noise scaling to compensate for local residual noise power
         if localNoisePowerCompensation and (polarization=='HV' or polarization=='VH'):
             sigma0 = self.rawSigma0Map(polarization)
-            newNoiseEquivalentSigma0 = self.adaptiveNoiseScaling(
-                sigma0, newNoiseEquivalentSigma0, subswathIndexMap, extraScalingParameters, 5)
-        return newNoiseEquivalentSigma0
-
-    def modifiedNoiseEquivalentSigma0Map(self, polarization, localNoisePowerCompensation=False):
-        ''' Get noise power-scaled and interswath power-balanced noise equivalent sigma nought '''
-        noiseEquivalentSigma0 = self.rawNoiseEquivalentSigma0Map(polarization, lutShift=True)
-        return self.modifyNoiseEquivalentSigma0Map(noiseEquivalentSigma0, polarization,
-            localNoisePowerCompensation)
+            noiseEquivalentSigma0 = self.adaptiveNoiseScaling(
+                sigma0, noiseEquivalentSigma0, subswathIndexMap, extraScalingParameters, 5)
+        return noiseEquivalentSigma0
 
     def thermalNoiseRemoval(self, polarization, algorithm='NERSC',
             localNoisePowerCompensation=False, preserveTotalPower=False, returnNESZ=False):
@@ -1592,7 +1588,7 @@ class Sentinel1Image(Nansat):
 
         return s0o
 
-    def getS0Nesz(self, polarization):
+    def getS0Nesz(self, polarization, **kwargs):
         """ Get a dictonary of matrices with Sigma0, and NESZ by ESA and NERSC algorithms
         Parameters
         ----------
@@ -1612,14 +1608,13 @@ class Sentinel1Image(Nansat):
         sz = self.rawSigma0Map(polarization=polarization)
         sz[sz == 0] = np.nan
         d_s0_nesz['sz'] = sz
-        d_s0_nesz['nesz_esa'] = self.rawNoiseEquivalentSigma0Map(polarization=polarization)
-        d_s0_nesz['nesz_nersc'] = self.modifyNoiseEquivalentSigma0Map(
-            d_s0_nesz['nesz_esa'],
-            polarization=polarization)
+        d_s0_nesz['nesz_esa'] = self.rawNoiseEquivalentSigma0Map(polarization=polarization, **kwargs)
+        d_s0_nesz['nesz_nersc'] = self.modifiedNoiseEquivalentSigma0Map(polarization=polarization, **kwargs)
         return d_s0_nesz
 
-    def qualityAssesment(self, polarization, num_px = 100):
-        ''' Denoising quality assessment near subswath margins based on Fisher's criteria
+    def get_range_quality_metric(self, polarization, num_px=100, **kwargs):
+        ''' Compute Range Quality Metric (signal jump between sub-swaths relative to std) in
+         <num_px> x <num_px> patches along sub-swath margins.
 
         Parameters
         ----------
@@ -1631,104 +1626,43 @@ class Sentinel1Image(Nansat):
 
         Returns
         -------
-        q_ll_nersc_ss : list
-        q_ll_esa_ss : list
-            Lists with a mean values of quality metric values at sub-swath margins averaged for bursts
+        q_all : dict
+            The keys are following: 'RQM_EW1_ESA', 'RQM_EW1_NERSC', etc
+            The values are 1D arrays with RQM for each patch
         '''
 
         swath_bounds = self.import_swathBounds(polarization)
 
         # get denoise results (s0-nesz)
-        res = self.getS0Nesz(polarization)
+        res = self.getS0Nesz(polarization, **kwargs)
 
         s0_hv_esa = res['sz'] - res['nesz_esa']
         s0_hv_nersc = res['sz'] - res['nesz_nersc']
 
-        # for each burst
-        q_ll_nersc = []
-        q_ll_esa = []
-
-        q_ll_nersc_ss = []
-        q_ll_esa_ss = []
-
-        # mean for all bursts in sub-swath
-        results = {'QAM_ESA': {}, 'QAM_NERSC': {}}
-
-        print('\nDenoise evaluation...\n')
-        for li in self.swath_ids:
+        q_all = {}
+        for li in self.swath_ids[:-1]:
             print('\n\n%s%s-%s%s' % (self.obsMode, li, self.obsMode, li+1))
             subswath_name = '%s%s' % (self.obsMode, li)
-            # globals()[var_name] = var_name
 
-            # lists to average all bursts within subswath
-            q_subswath_nersc = []
-            q_subswath_esa = []
+            q_subswath = []
+            for fa, la, lr in zip(swath_bounds[subswath_name]['firstAzimuthLine'],
+                              swath_bounds[subswath_name]['lastAzimuthLine'],
+                              swath_bounds[subswath_name]['lastRangeSample'],):
+                patch_0rows = np.arange(fa, la-num_px, num_px)
+                patch_0col = lr - num_px
+                patch_1col = lr
+                for patch_0row in patch_0rows:
+                    q_patch = []
+                    for arr in (s0_hv_esa, s0_hv_nersc):
+                        s1 = arr[patch_0row:patch_0row+num_px, lr-num_px:lr]
+                        s2 = arr[patch_0row:patch_0row+num_px, lr+1:lr+1+num_px]
+                        q = np.abs(np.nanmean(s1) - np.nanmean(s2)) / (np.nanstd(s1) + np.nanstd(s2))
+                        q_patch.append(q)
+                    q_subswath.append(q_patch)
 
-            for i in range(len(swath_bounds[subswath_name]['firstAzimuthLine'])):
-                q_nersc = []
-                q_esa = []
-                middle_az = round((swath_bounds[subswath_name]['firstAzimuthLine'][i]-\
-                            swath_bounds[subswath_name]['lastAzimuthLine'][i])/2)
+            q_subswath = np.array(q_subswath)
+            q_all[f'RQM_{subswath_name}_ESA'] = q_subswath[:, 0]
+            q_all[f'RQM_{subswath_name}_NERSC'] = q_subswath[:, 1]
 
-                # NERSC denoise assesment
-                # First burst patch
-                s0_01 = s0_hv_nersc[middle_az - num_px:middle_az + num_px,
-                        swath_bounds[subswath_name]['lastRangeSample'][i] - num_px:
-                        swath_bounds[subswath_name]['lastRangeSample'][i]]
-                s0_01_std = np.nanstd(s0_01)
-
-                # Second burst patch
-                s0_02 = s0_hv_nersc[middle_az - num_px:middle_az + num_px,
-                        swath_bounds[subswath_name]['lastRangeSample'][i] + 1:
-                        swath_bounds[subswath_name]['lastRangeSample'][i] + num_px]
-                s0_02_std = np.nanstd(s0_02)
-
-                # ESA denoise assesment
-                s0_01_esa = s0_hv_esa[middle_az - num_px:middle_az + num_px,
-                            swath_bounds[subswath_name]['lastRangeSample'][i] - num_px:
-                            swath_bounds[subswath_name]['lastRangeSample'][i]]
-                s0_01_esa_std = np.nanstd(s0_01_esa)
-
-                s0_02_esa = s0_hv_esa[middle_az - num_px:middle_az + num_px,
-                            swath_bounds[subswath_name]['lastRangeSample'][i] + 1:
-                            swath_bounds[subswath_name]['lastRangeSample'][i] + num_px]
-                s0_02_esa_std = np.nanstd(s0_02_esa)
-
-                # Current burst
-                q_nersc = np.abs((np.nanmean(s0_01) - np.nanmean(s0_02)) / (s0_01_std + s0_02_std))
-                q_esa =   np.abs((np.nanmean(s0_01_esa) - np.nanmean(s0_02_esa)) / (s0_01_esa_std + s0_02_esa_std))
-
-                print('Quality assesment for burst %s (NERSC/ESA) = %.5f/%.5f' % (i, q_nersc, q_esa))
-
-                # Collect burst values
-                q_subswath_nersc.append(q_nersc)
-                q_subswath_esa.append(q_esa)
-
-            qam_ss_mean_nersc = np.nanmean(q_subswath_nersc)
-            qam_ss_mean_esa = np.nanmean(q_subswath_esa)
-
-            results['QAM_ESA']['%s%s-%s%s' % (self.obsMode, li, self.obsMode, li + 1)] = qam_ss_mean_esa
-            results['QAM_NERSC']['%s%s-%s%s' % (self.obsMode, li, self.obsMode, li + 1)] = qam_ss_mean_nersc
-
-            # Collect mean values for sub-swath
-            q_ll_nersc_ss.append(qam_ss_mean_nersc)
-            q_ll_esa_ss.append(qam_ss_mean_esa)
-
-            print('\nMeans for sub-swath (NERSC/ESA) = %.5f/%.5f\n' % (qam_ss_mean_nersc, qam_ss_mean_esa))
-
-        # Mean for all sub-swaths
-        print('\n\Lists for sub-swaths:\n')
-        print('NERSC: %s' % q_ll_nersc_ss)
-        print('ESA: %s\n' % q_ll_esa_ss)
-
-        mean_esa_qam   = np.nanmean(q_ll_esa_ss)
-        mean_nersc_qam = np.nanmean(q_ll_nersc_ss)
-
-        print('\n###-> Mean quality assessment ESA: %s' % mean_esa_qam)
-        print('###-> Mean quality assessment NERSC: %s\n' % mean_nersc_qam)
-
-        results['QAM_ESA']['Mean'] = mean_esa_qam
-        results['QAM_NERSC']['Mean'] = mean_nersc_qam
-
-        return results
+        return q_all
 
