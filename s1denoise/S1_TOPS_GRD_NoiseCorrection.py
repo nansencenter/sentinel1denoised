@@ -1666,3 +1666,71 @@ class Sentinel1Image(Nansat):
 
         return q_all
 
+    def autocorr(x, th=0.7):
+        ''' Autocorrelation function for periodicity detection
+        '''
+        n = x.size
+        norm = (x - np.nanmean(x))
+
+        # mode='same' means that at least half of
+        # the shifted array overlaps the original one
+        result = np.correlate(norm, norm, mode='same')
+
+        # true correlation coefficient (r) (divide by size of the overlap)
+        acorr = result[n // 2 + 1:] / (x.var() * np.arange(n - 1, n // 2, -1))
+
+        lag = np.abs(acorr[10:]).argmax() + 11
+        r = acorr[lag - 1]
+
+        # values of r below 1 are a significant indication of autocorrelation,
+        # which corresponds to r > ~0.7 according to Durbin–Watson h-criteria
+        # https://en.wikipedia.org/wiki/Durbin%E2%80%93Watson_statistic
+
+        if np.abs(r) > th:
+            print('Appears to be autocorrelated with r = %.2f, pixel lag = %d' %
+                  (r, lag))
+            return 1
+        else:
+            print('Appears to be not autocorrelated')
+            return 0
+
+    def get_azimuth_quality_metric(self, polarization, num_px=100, **kwargs):
+        ''' Periodicity detection along azimuth direction by autocorrelation function
+
+        Parameters
+        ----------
+        polarisation : str
+            'HH', 'HV', 'VV', 'VH'
+
+        Returns
+        -------
+        res : 0 or 1, where 0 indicate no scalloping signature and 1 corresponds to scalloping effect existence
+        '''
+
+        res_aqm = {}
+
+        swath_bounds = self.import_swathBounds(polarization)
+
+        # get denoise results (s0-nesz)
+        res = self.getS0Nesz(polarization, **kwargs)
+
+        s0_hv_esa = res['sz'] - res['nesz_esa']
+        s0_hv_nersc = res['sz'] - res['nesz_nersc']
+
+        # Take small patch along azimuth direction in the first sub-swath
+        im_patch_esa = s0_hv_esa[400:800, 350:400]
+        im_patch_nersc = s0_hv_esa[400:800, 350:400]
+
+        im_patch_esa_mean = np.mean(im_patch_esa, axis=1)
+        im_patch_nersc_mean = np.mean(im_patch_nersc, axis=1)
+
+        # Check if scalloping effect is exist
+        aqm_esa = self.autocorr(im_patch_esa_mean, th=0.8)
+        aqm_nersc = self.autocorr(im_patch_nersc_mean, th=0.8)
+
+        res_aqm['AQM_ESA'] = aqm_esa
+        res_aqm['AQM_NERSC'] = aqm_nersc
+
+        return res_aqm
+
+
