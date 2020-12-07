@@ -1694,7 +1694,7 @@ class Sentinel1Image(Nansat):
             print('Appears to be not autocorrelated')
             return 0
 
-    def get_azimuth_quality_metric(self, polarization, num_px=100, **kwargs):
+    def get_azimuth_quality_metric(self, polarization, **kwargs):
         ''' Periodicity detection along azimuth direction by autocorrelation function
 
         Parameters
