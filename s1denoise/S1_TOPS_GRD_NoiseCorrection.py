@@ -1709,7 +1709,7 @@ class Sentinel1Image(Nansat):
 
         res_aqm = {}
 
-        swath_bounds = self.import_swathBounds(polarization)
+        #swath_bounds = self.import_swathBounds(polarization)
 
         # get denoise results (s0-nesz)
         res = self.getS0Nesz(polarization, **kwargs)
@@ -1719,7 +1719,7 @@ class Sentinel1Image(Nansat):
 
         # Take small patch along azimuth direction in the first sub-swath
         im_patch_esa = s0_hv_esa[400:800, 350:400]
-        im_patch_nersc = s0_hv_esa[400:800, 350:400]
+        im_patch_nersc = s0_hv_nersc[400:800, 350:400]
 
         im_patch_esa_mean = np.mean(im_patch_esa, axis=1)
         im_patch_nersc_mean = np.mean(im_patch_nersc, axis=1)
