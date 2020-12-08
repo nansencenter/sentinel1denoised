@@ -1666,7 +1666,7 @@ class Sentinel1Image(Nansat):
 
         return q_all
 
-    def autocorr(x, th=0.7):
+    def autocorr(self, x, th=0.7, **kwargs):
         ''' Autocorrelation function for periodicity detection
         '''
         n = x.size
@@ -1725,8 +1725,8 @@ class Sentinel1Image(Nansat):
         im_patch_nersc_mean = np.mean(im_patch_nersc, axis=1)
 
         # Check if scalloping effect is exist
-        aqm_esa = self.autocorr(im_patch_esa_mean, th=0.8)
-        aqm_nersc = self.autocorr(im_patch_nersc_mean, th=0.8)
+        aqm_esa = self.autocorr(im_patch_esa_mean)
+        aqm_nersc = self.autocorr(im_patch_nersc_mean)
 
         res_aqm['AQM_ESA'] = aqm_esa
         res_aqm['AQM_NERSC'] = aqm_nersc
