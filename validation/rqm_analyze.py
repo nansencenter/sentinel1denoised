@@ -33,93 +33,44 @@ def parse_run_experiment_args():
                         help='Number of cores for parallel computation')
     return parser.parse_args()
 
-def plot_results(esa_files, nersc_files, mean_esa, mean_nersc, std_esa, std_nersc, mean_diff, mean_diff_std,
-                 out_path, data_name):
+def plot_results(d_plot, out_path):
     plt.clf()
-
-    data_esa = []
-    data_nersc = []
-    data_diff = []
-
-    labels = []
-
-    ind = np.arange(len(esa_files)+2)  # the x locations for the groups
-    width = 0.15  # the width of the bars
-
-    for esa_file, nersc_file in zip(esa_files, nersc_files):
-        with open(esa_file) as esa_json_file:
-            d_esa = json.load(esa_json_file)
-
-        with open(nersc_file) as nersc_json_file:
-            d_nersc = json.load(nersc_json_file)
-
-        for i, sar_id in enumerate(d_esa):
-            mean_esa_region = d_esa[sar_id]['Mean'][0]
-            data_esa.append(mean_esa_region)
-
-        for i, sar_id in enumerate(d_nersc):
-            mean_nersc_region = d_nersc[sar_id]['Mean'][0]
-            data_nersc.append(mean_nersc_region)
-
-        data_diff.append(mean_esa_region-mean_nersc_region)
-
-        labels.append(os.path.basename(esa_file).split('_')[4])
-    labels.append('Total')
-
-    plot_mean_esa = np.nanmean(data_esa)
-    plot_std_esa = np.nanstd(data_esa)
-    plot_std_esa.append(std_esa)
-
-    plot_mean_nersc = np.nanmean(data_nersc)
-    plot_std_nersc = np.nanstd(data_nersc)
-    plot_std_nersc.append(std_nersc)
-
-    plot_mean_diff = np.nanmean(data_diff)
-    plot_std_diff = np.nanstd(data_diff)
 
     fig = plt.figure()
     ax = fig.add_subplot(111)
 
-    rects1 = ax.bar(ind, plot_mean_esa, width, color='royalblue', yerr=plot_std_esa)
-    rects2 = ax.bar(ind + width, plot_mean_nersc, width, color='seagreen', yerr=plot_std_nersc)
-    rects3 = ax.bar(ind + width * 2, plot_mean_diff, width, color='red', yerr=plot_std_diff)
+    data = []
+    data.append(d_plot['Mean_ESA'])
+    data.append(d_plot['Mean_NERSC'])
+    data.append(d_plot['Mean_Diff'])
+    print(data)
 
-    # add some
+    color_list = ['g', 'b', 'r']
+    gap = .8 / len(data)
+    for i, row in enumerate(data):
+        try:
+            X = np.arange(len(row))
+        except:
+            X = np.arange(1)
+        plt.bar(X + i * gap, row,
+                width=gap,
+                color=color_list[i % len(color_list)])
+
     ax.set_ylabel('RQM')
     ax.set_title('%s %s %s' % (args.platform, args.mode, args.polarization))
-    ax.set_xticks(ind + width)
-    ax.set_xticklabels(labels)
+    #ax.set_xticks(ind + width)
+    #labels = d_plot.keys()
+    #ax.set_xticklabels(labels)
+    ax.legend((data[0], data[1], data[2]), ('ESA', 'NERSC', 'Diff.'))
 
-    ax.legend((rects1[0], rects2[0], rects3[0]), ('ESA', 'NERSC', 'Diff.'))
+    plt.savefig(out_path, bbox_inches='tight', dpi=300)
 
-    plt.savefig('%s/%s_RQM.png' % (out_path, data_name), bbox_inches='tight', dpi=300)
-
-def get_aggregated_stat(esa_files, nersc_files):
-    """ Get averaged data from many json files
-    """
-    total_mean_esa = []
-    total_mean_nersc = []
-
-    for esa_file, nersc_file in zip(esa_files, nersc_files):
-        with open(esa_file) as esa_json_file:
-            d_esa = json.load(esa_json_file)
-        with open(nersc_file) as nersc_json_file:
-            d_nersc = json.load(nersc_json_file)
-
-        for i, sar_id in enumerate(d_esa):
-            mean_esa = d_esa[sar_id]['Mean'][0]
-            total_mean_esa.append(mean_esa)
-
-        for i, sar_id in enumerate(d_nersc):
-            mean_nersc = d_nersc[sar_id]['Mean'][0]
-            total_mean_nersc.append(mean_nersc)
-
-    # Calculate mean difference
-    mean_diff = np.array(total_mean_esa) - np.array(total_mean_nersc)
-
-    return np.nanmean(total_mean_esa), np.nanmean(total_mean_nersc),\
-           np.nanstd(total_mean_esa), np.nanstd(total_mean_nersc), np.nanmean(mean_diff), np.nanstd(mean_diff)
-
+def get_mean_std(pref, data):
+    res_ll = []
+    for key in data.keys():
+        if pref in key:
+            res_ll.append(data[key])
+    return np.nanmean(np.concatenate(res_ll)), np.nanstd(np.concatenate(res_ll)), np.concatenate(res_ll)
 
 pol_mode = {
     'VH': '1SDV',
@@ -128,11 +79,14 @@ pol_mode = {
 
 args = parse_run_experiment_args()
 os.makedirs(args.out_path, exist_ok=True)
-npz_list = glob.glob('%s/*%s*%s*%s*.npz' % (args.in_path, args.platform, args.mode, pol_mode[args.polarization]))
+npz_list = glob.glob('%s/*%s*%s*%s*.npz' %
+                     (args.in_path, args.platform, args.mode, pol_mode[args.polarization]))
 
 total_esa_data = []
 total_nersc_data = []
 total_diff_data = []
+
+res_d = {}
 
 # Create lists based on keys names
 a = npz_list[0]
@@ -140,31 +94,34 @@ a = np.load(a)
 d_npz = dict(zip((k for k in a), (a[k] for k in a)))
 
 for key in d_npz.keys():
-    var_name = '%s_ll' % key
-    vars()[var_name] = []
-    var_name = '%s_diff_ll' % key
-    vars()[var_name] = []
+    res_d['%s_ll' % key] = []
 
 # Collect data for each margin
 for key in d_npz.keys():
     for a in npz_list:
         var_name = '%s_ll' % key
-        # Add mean value for subswath margin for each scene
-        vars()[var_name].append(d_npz[key])
-    arr = np.concatenate(vars()[var_name])
-    vars()[var_name] = arr
+        res_d[var_name].append(d_npz[key])
+    arr = np.concatenate(res_d[var_name])
+    res_d[var_name] = arr
 
+d_plot = {}
 
+# Print results
+m_esa, std_esa, data_esa = get_mean_std('ESA', res_d)
+d_plot['Mean_ESA'] = m_esa
+d_plot['STD_ESA'] = std_esa
+print('\n#####\nESA mean/STD: %.3f/%.3f\n#####\n' % (m_esa, std_esa))
 
+m_nersc, std_nersc, data_nersc = get_mean_std('NERSC', res_d)
+d_plot['Mean_NERSC'] = m_nersc
+d_plot['STD_NERSC'] = std_nersc
+print('\n#####\nNERSC mean/STD: %.3f/%.3f\n#####\n' % (m_nersc, std_nersc))
 
-'''
-# Get aggregated stat
-mean_esa, mean_nersc, std_esa, std_nersc, \
-        mean_diff, mean_diff_std = \
-    get_aggregated_stat(esa_json_list, nersc_json_list)
+diff = data_esa - data_nersc
+m_diff = np.nanmean(diff)
+std_diff = np.nanstd(diff)
+d_plot['Mean_Diff'] = m_diff
+d_plot['STD_Diff'] = std_diff
+print('\n#####\nDifference mean/STD: %.3f/%.3f\n#####\n' % (m_diff, std_diff))
 
-plot_results(esa_json_list, nersc_json_list, mean_esa, mean_nersc, std_esa, std_nersc,
-                     mean_diff, mean_diff_std, args.out_dir, data_name)
-                     
-'''
-
+plot_results(d_plot, 'test_plot.png')
