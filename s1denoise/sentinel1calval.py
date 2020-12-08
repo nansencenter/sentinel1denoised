@@ -16,7 +16,10 @@ def cost(x, pix_valid, interp, y_ref):
 
 
 class Sentinel1CalVal(Sentinel1Image):
+    """ Cal/Val routines for Sentinel-1 performed on range noise vector coordinatess"""
+
     def get_noise_range_vectors(self, polarization):
+        """ Get range noise from XML files and return noise, pixels and lines for non-zero elems"""
         noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
         nrv_line = np.array(noiseRangeVector['line'])
         nrv_pixel = []
@@ -31,6 +34,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return nrv_line, nrv_pixel, nrv_noise
 
     def get_calibration_vectors(self, polarization, nrv_line, nrv_pixel):
+        """ Interpolate sigma0 calibration from XML file to the input line/pixel coordinates """
         nrv_cal_s0 = [np.zeros(p.size)+np.nan for p in nrv_pixel]
         calibrationVector = self.import_calibrationVector(polarization)
         cal_s0 = np.array(calibrationVector['sigmaNought'])
@@ -65,6 +69,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return nrv_cal_s0
 
     def get_noise_azimuth_vectors(self, polarization, nrv_line, nrv_pixel):
+        """ Interpolate scalloping noise from XML files to input pixel/lines coords """
         nrv_scall = [np.zeros(p.size)+np.nan for p in nrv_pixel]
         noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
         for iSW in self.swath_ids:
@@ -86,6 +91,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return nrv_scall
 
     def get_raw_nesz_vectors(self, nrv_noise, nrv_cal_s0, nrv_scall):
+        """ Compute calibrated raw NESZ """
         # calibrate noise and compute NESZ
         nrv_nesz = []
         for n, cal, scall in zip(nrv_noise, nrv_cal_s0, nrv_scall):
@@ -94,6 +100,11 @@ class Sentinel1CalVal(Sentinel1Image):
         return nrv_nesz
 
     def get_eap_interpolator(self, subswathID, polarization):
+        """
+        Prepare interpolator for Elevation Antenna Pattern.
+        It computes EAP for input boresight angles
+
+        """
         elevationAntennaPatternLUT = self.import_elevationAntennaPattern(polarization)
         eap_lut = np.array(elevationAntennaPatternLUT[subswathID]['elevationAntennaPattern'])
         eai_lut = elevationAntennaPatternLUT[subswathID]['elevationAngleIncrement']
@@ -104,6 +115,11 @@ class Sentinel1CalVal(Sentinel1Image):
         return eap_interpolator
 
     def get_boresight_angle_interpolator(self, polarization):
+        """
+        Prepare interpolator for boresaight angles.
+        It computes BA for input x,y coordinates.
+
+        """
         geolocationGridPoint = self.import_geolocationGridPoint(polarization)
         xggp = np.unique(geolocationGridPoint['pixel'])
         yggp = np.unique(geolocationGridPoint['line'])
@@ -135,6 +151,10 @@ class Sentinel1CalVal(Sentinel1Image):
         return boresight_angle_interpolator
 
     def get_range_spread_loss_interpolator(self, polarization):
+        """ Prepare interpolator for Range Spreading Loss.
+        It computes RSL for input x,y coordinates.
+
+        """
         geolocationGridPoint = self.import_geolocationGridPoint(polarization)
         xggp = np.unique(geolocationGridPoint['pixel'])
         yggp = np.unique(geolocationGridPoint['line'])
@@ -146,6 +166,10 @@ class Sentinel1CalVal(Sentinel1Image):
         return rsp_interpolator
 
     def get_shifted_nesz_vectors(self, polarization, nrv_line, nrv_pixel, nrv_noise, nrv_cal_s0, nrv_scall):
+        """
+        Estimate shift in range noise LUT relative to antenna gain pattern and correct for it.
+
+        """
         nrv_nesz_shifted = [np.zeros(p.size)+np.nan for p in nrv_pixel]
         swathBounds = self.import_swathBounds(polarization)
         # noise lut shift
@@ -187,6 +211,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return nrv_nesz_shifted
 
     def get_corrected_nesz_vectors(self, polarization, nrv_line, nrv_pixel, nesz):
+        """ Load scaling and offset coefficients from files and apply to input  NESZ """
         nrv_nesz_corrected = [np.zeros(p.size)+np.nan for p in nrv_pixel]
         swathBounds = self.import_swathBounds(polarization)
         ns, pb = self.import_denoisingCoefficients(polarization)[:2]
@@ -208,6 +233,10 @@ class Sentinel1CalVal(Sentinel1Image):
         return nrv_nesz_corrected
 
     def get_raw_sigma_zero_vectors(self, polarization, nrv_line, nrv_pixel, nrv_cal_s0, average_lines=111):
+        """ Read DN_ values from input GeoTIff for a given lines, average in azimuth direction,
+        compute sigma0, and return sigma0 for given pixels
+
+        """
         ws2 = np.floor(average_lines / 2)
         raw_sigma_zero = [np.zeros(p.size)+np.nan for p in nrv_pixel]
         src_filename = self.bands()[self.get_band_number(f'DN_{polarization}')]['SourceFilename']
@@ -224,6 +253,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return raw_sigma_zero
 
     def compute_rqm(self, s0, polarization, nrv_line, nrv_pixel, num_px=100, **kwargs):
+        """ Compute Range Quality Metric from the input sigma0 """
         swathBounds = self.import_swathBounds(polarization)
         q_all = {}
         for swid in self.swath_ids[:-1]:
@@ -249,6 +279,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return q_all
 
     def get_range_quality_metric(self, polarization='HV', **kwargs):
+        """ Compute sigma0 with three methods (ESA, SHIFTED, NERSC), compute RQM for each sigma0 """
         nrv_line, nrv_pixel, nrv_noise = self.get_noise_range_vectors(polarization)
         nrv_cal_s0 = self.get_calibration_vectors(polarization, nrv_line, nrv_pixel)
         nrv_scall = self.get_noise_azimuth_vectors(polarization, nrv_line, nrv_pixel)
@@ -270,6 +301,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return q_all
 
     def experiment_noiseScaling(self, polarization, min_corr_coef=0.6):
+        """ Compute noise scaling coefficients for each range noise line and save as NPZ """
         crop = {'IW':400, 'EW':200}[self.obsMode]
         swathBounds = self.import_swathBounds(polarization)
         nrv_line, nrv_pixel, nrv_noise = self.get_noise_range_vectors(polarization)
