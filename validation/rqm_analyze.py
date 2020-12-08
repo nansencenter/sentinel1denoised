@@ -138,19 +138,21 @@ total_diff_data = []
 a = npz_list[0]
 a = np.load(a)
 d_npz = dict(zip((k for k in a), (a[k] for k in a)))
+
 for key in d_npz.keys():
     var_name = '%s_ll' % key
     vars()[var_name] = []
+    var_name = '%s_diff_ll' % key
+    vars()[var_name] = []
 
-# Collect data into vars
-for a in npz_list:
-    a = np.load(a)
-    d_npz = dict(zip((k for k in a), (a[k] for k in a)))
-
-    for key in d_npz.keys():
+# Collect data for each margin
+for key in d_npz.keys():
+    for a in npz_list:
         var_name = '%s_ll' % key
         # Add mean value for subswath margin for each scene
-        vars()[var_name].append(np.nanmean(d_npz[key]))
+        vars()[var_name].append(d_npz[key])
+    arr = np.concatenate(vars()[var_name])
+    vars()[var_name] = arr
 
 
 
