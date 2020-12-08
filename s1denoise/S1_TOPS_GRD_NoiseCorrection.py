@@ -142,6 +142,30 @@ def fillGaps(dataArray, filterSize=3):
         ri,ci = np.where(np.isnan(dataArray))
     return dataArray
 
+def fit_noise_scaling_coeff(meanS0, meanN0, pixelIndex):
+    """ Fit noise scaling coefficient on one vector of sigma0, nesz and pixel values """
+    # weight is proportional to gradient of sigma0, the areas where s0 varies the most
+    weight = abs(np.gradient(meanN0))
+    weight = weight / weight.sum() * np.sqrt(len(weight))
+    # polyfit is used only to return error (second return param) when fitting func:
+    # s0-k*no = f(A*x + B). Where:
+    # s0 - sigma0
+    # n0 - thermal noise
+    # k - noise scaling (to be identified at later stage of fitting)
+    # x - pixel index
+    # A, B - just some polynom coeffs that are not used
+    errFunc = lambda k,x,s0,n0,w: np.polyfit(x,s0-k*n0,w=w,deg=1,full=True)[1].item()
+    # now with polynom fitting function in place, K (the noise scaling coefficient)
+    # is fitted iteratively using fminbound
+    scalingFactor = fminbound(errFunc, 0, 3,
+        args=(pixelIndex,meanS0,meanN0,weight), disp=False).item()
+    # correlatin between sigma0 and scaled noise
+    correlationCoefficient = np.corrcoef(meanS0, scalingFactor * meanN0)[0,1]
+    # error of fitting of the seclected scaling factor (K)
+    fitResidual = np.polyfit(pixelIndex, meanS0 - scalingFactor * meanN0,
+                             w=weight, deg=1, full=True)[1].item()
+    return scalingFactor, correlationCoefficient, fitResidual
+
 
 class Sentinel1Image(Nansat):
 
@@ -785,13 +809,16 @@ class Sentinel1Image(Nansat):
             uniqueLine, uniquePixel, rollAngleIntp(azimuthTimeIntp(uniqueLine, uniquePixel)))
         return interpolator
 
-    def elevationAntennaPatternInterpolator(self, polarization):
+    def elevationAntennaPatternInterpolator(self, polarization, refined_eap=True, **kwargs):
         ''' Generate elevation antenna pattern interpolator
 
         Inerpolator that retuns antenna pattern for given elevation angle
         '''
-        #elevationAngleIntp = self.geolocationGridPointInterpolator(polarization, 'elevationAngle')
-        elevationAngleIntp = self.refinedElevationAngleInterpolator(polarization)
+        if refined_eap:
+            elevationAngleIntp = self.refinedElevationAngleInterpolator(polarization)
+        else:
+            elevationAngleIntp = self.geolocationGridPointInterpolator(polarization, 'elevationAngle')
+
         elevationAngleMap = np.squeeze(elevationAngleIntp(
             np.arange(self.shape()[0]), np.arange(self.shape()[1])))
         rollAngleIntp = self.rollAngleInterpolator(polarization)
@@ -832,7 +859,7 @@ class Sentinel1Image(Nansat):
             np.arange(self.shape()[0]), np.arange(self.shape()[1]), rangeSpreadingLoss)
         return interpolator
 
-    def noiseVectorMap(self, polarization, lutShift=False):
+    def noiseVectorMap(self, polarization, lutShift=False, **kwargs):
         ''' Convert noise vectors into full grid pixels '''
         # lutShift is introduced to correct erroneous range shifts in the annotated noise vectors.
         # lutShift is a new functionality developed after we published the reference, R1.
@@ -856,7 +883,7 @@ class Sentinel1Image(Nansat):
             cPx = 150    # clip size of side pixels
             annotatedElevationAngleIntp = self.geolocationGridPointInterpolator(polarization,
                 'elevationAngle')
-            elevationAntennaPatternIntp = self.elevationAntennaPatternInterpolator(polarization)
+            elevationAntennaPatternIntp = self.elevationAntennaPatternInterpolator(polarization, **kwargs)
             rangeSpreadingLossIntp = self.rangeSpreadingLossInterpolator(polarization)
             for iSW in self.swath_ids:
                 subswathID = '%s%s' % (self.obsMode, iSW)
@@ -882,6 +909,7 @@ class Sentinel1Image(Nansat):
                     referencePattern = ((1. / elevationAntennaPatternIntp(y, xBins[cPx:-cPx])
                         / rangeSpreadingLossIntp(y, xBins[cPx:-cPx]))**2).flatten()
                     zInterpolator = InterpolatedUnivariateSpline(x[valid], z[valid])
+
                     # Finding pixel shift, OPTION 1: Cross-correlation
                     # here we find only single value of shift per line per subswath
                     xShiftPixel, deltaShift, ni = 0, np.inf, 0
@@ -980,9 +1008,9 @@ class Sentinel1Image(Nansat):
         #sigma0[DN2==0] = np.nan
         return sigma0
 
-    def rawNoiseEquivalentSigma0Map(self, polarization, lutShift=False):
+    def rawNoiseEquivalentSigma0Map(self, polarization, lutShift=False, **kwargs):
         ''' Get annotated noise equivalent sigma nought '''
-        noiseEquivalentSigma0 = (   self.noiseVectorMap(polarization, lutShift=lutShift)
+        noiseEquivalentSigma0 = (   self.noiseVectorMap(polarization, lutShift=lutShift, **kwargs)
                                   / np.power(self.calibrationVectorMap(polarization), 2) )
         # pre-scaling is needed for noise vectors when they have very low values
         if 10 * np.log10(np.nanmean(noiseEquivalentSigma0)) < -40:
@@ -1120,7 +1148,7 @@ class Sentinel1Image(Nansat):
         noiseScalingParameters, powerBalancingParameters, extraScalingParameters = (
             self.import_denoisingCoefficients(polarization, localNoisePowerCompensation)[:3])
         # apply noise scaling and power balancing to noise-equivalent sigma nought
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+        for iSW in self.swath_ids:
             valid = (subswathIndexMap==iSW)
             noiseEquivalentSigma0[valid] *= noiseScalingParameters['%s%s' % (self.obsMode, iSW)]
             noiseEquivalentSigma0[valid] += powerBalancingParameters['%s%s' % (self.obsMode, iSW)]
@@ -1254,27 +1282,9 @@ class Sentinel1Image(Nansat):
                 # averaging in azimuth direction
                 meanS0 = np.nanmean(np.where(blockSWI==iSW, blockS0, np.nan), axis=0)[pixelIndex]
                 meanN0 = np.nanmean(np.where(blockSWI==iSW, blockN0, np.nan), axis=0)[pixelIndex]
-                # weight is proportional to gradient of sigma0, the areas where s0 varies the most
-                weight = abs(np.gradient(meanN0))
-                weight = weight / weight.sum() * np.sqrt(len(weight))
-                # polyfit is used only to return error (second return param) when fitting func:
-                # s0-k*no = f(A*x + B). Where:
-                # s0 - sigma0
-                # n0 - thermal noise
-                # k - noise scaling (to be identified at later stage of fitting)
-                # x - pixel index
-                # A, B - just some polynom coeffs that are not used
-                errFunc = lambda k,x,s0,n0,w: np.polyfit(x,s0-k*n0,w=w,deg=1,full=True)[1].item()
-                # now with polynom fitting function in place, K (the noise scaling coefficient)
-                # is fitted iteratively using fminbound
-                scalingFactor = fminbound(errFunc, 0, 3,
-                    args=(pixelIndex,meanS0,meanN0,weight), disp=False).item()
-                # correlatin between sigma0 and scaled noise
-                correlationCoefficient = np.corrcoef(meanS0, scalingFactor * meanN0)[0,1]
-                # error of fitting of the seclected scaling factor (K)
-                fitResidual = np.polyfit(pixelIndex, meanS0 - scalingFactor * meanN0,
-                                         w=weight, deg=1, full=True)[1].item()
-
+                (scalingFactor,
+                 correlationCoefficient,
+                 fitResidual) = fit_noise_scaling_coeff(meanS0, meanN0, pixelIndex)
                 # NB1: in future triple fitting (polyfit for A,B; fminbound for K;
                 # polyfit for fitResidual) can be replaced with scipy.optimize.curve_fit:
                 # s0 = a + b*x + K*n0
