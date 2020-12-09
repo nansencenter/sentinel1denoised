@@ -54,8 +54,6 @@ def plot_results(d_plot, out_path):
         nersc_data.append((d_plot[key]['Mean_NERSC'], d_plot[key]['STD_NERSC']))
         diff_data.append((d_plot[key]['Mean_Diff'], d_plot[key]['STD_Diff']))
 
-
-
     # append last bar with the mean
     esa_m = np.nanmean(np.array(esa_data)[:, 0])
     esa_std = np.nanmean(np.array(esa_data)[:, 1])
