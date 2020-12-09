@@ -3,6 +3,7 @@ from osgeo import gdal
 from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
 from scipy.optimize import minimize
 from scipy.stats import pearsonr
+from scipy.interpolate import interp1d
 
 from s1denoise.S1_TOPS_GRD_NoiseCorrection import Sentinel1Image, fit_noise_scaling_coeff
 
@@ -80,9 +81,12 @@ class Sentinel1CalVal(Sentinel1Image):
                 lrs = noiseAzimuthVector[subswathID]['lastRangeSample'][iBlk]
                 fal = noiseAzimuthVector[subswathID]['firstAzimuthLine'][iBlk]
                 lal = noiseAzimuthVector[subswathID]['lastAzimuthLine'][iBlk]
-                y = noiseAzimuthVector[subswathID]['line'][iBlk]
-                z = noiseAzimuthVector[subswathID]['noiseAzimuthLut'][iBlk]
-                nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
+                y = np.array(noiseAzimuthVector[subswathID]['line'][iBlk])
+                z = np.array(noiseAzimuthVector[subswathID]['noiseAzimuthLut'][iBlk])
+                if y.size > 1:
+                    nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
+                else:
+                    nav_interp = lambda x: z
 
                 nrv_line_gpi = np.where((nrv_line >= fal) * (nrv_line <= lal))[0]
                 for nrv_line_i in nrv_line_gpi:
@@ -174,7 +178,7 @@ class Sentinel1CalVal(Sentinel1Image):
         swathBounds = self.import_swathBounds(polarization)
         # noise lut shift
         for swid in self.swath_ids:
-            swath_name = f'EW{swid}'
+            swath_name = f'{self.obsMode}{swid}'
             swathBound = swathBounds[swath_name]
             eap_interpolator = self.get_eap_interpolator(swath_name, polarization)
             ba_interpolator = self.get_boresight_angle_interpolator(polarization)
@@ -210,13 +214,13 @@ class Sentinel1CalVal(Sentinel1Image):
                     nrv_nesz_shifted[v1][valid2] = scall * noise_shifted1 / cal**2
         return nrv_nesz_shifted
 
-    def get_corrected_nesz_vectors(self, polarization, nrv_line, nrv_pixel, nesz):
+    def get_corrected_nesz_vectors(self, polarization, nrv_line, nrv_pixel, nesz, add_pb=True):
         """ Load scaling and offset coefficients from files and apply to input  NESZ """
         nrv_nesz_corrected = [np.zeros(p.size)+np.nan for p in nrv_pixel]
         swathBounds = self.import_swathBounds(polarization)
         ns, pb = self.import_denoisingCoefficients(polarization)[:2]
         for swid in self.swath_ids:
-            swath_name = f'EW{swid}'
+            swath_name = f'{self.obsMode}{swid}'
             swathBound = swathBounds[swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
@@ -229,7 +233,8 @@ class Sentinel1CalVal(Sentinel1Image):
                 for v1 in valid1:
                     valid2 = np.where((nrv_pixel[v1] >= frs) * (nrv_pixel[v1] <= lrs))[0]
                     nrv_nesz_corrected[v1][valid2] = nesz[v1][valid2] * ns[swath_name]
-                    nrv_nesz_corrected[v1][valid2] += pb[swath_name]
+                    if add_pb:
+                        nrv_nesz_corrected[v1][valid2] += pb[swath_name]
         return nrv_nesz_corrected
 
     def get_raw_sigma_zero_vectors(self, polarization, nrv_line, nrv_pixel, nrv_cal_s0, average_lines=111):
@@ -258,7 +263,7 @@ class Sentinel1CalVal(Sentinel1Image):
         q_all = {}
         for swid in self.swath_ids[:-1]:
             q_subswath = []
-            swath_name = f'EW{swid}'
+            swath_name = f'{self.obsMode}{swid}'
             swathBound = swathBounds[swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
@@ -294,26 +299,31 @@ class Sentinel1CalVal(Sentinel1Image):
 
         q_all = {}
         for swid in self.swath_ids[:-1]:
-            swath_name = f'EW{swid}'
+            swath_name = f'{self.obsMode}{swid}'
             q_all[f'RQM_{swath_name}_ESA'] = q[0][swath_name]
             q_all[f'RQM_{swath_name}_SHIFT'] = q[1][swath_name]
             q_all[f'RQM_{swath_name}_NERSC'] = q[2][swath_name]
         return q_all
 
-    def experiment_noiseScaling(self, polarization, min_corr_coef=0.6):
+    def experiment_noiseScaling(self, polarization, average_lines=777, zoom_step=2):
         """ Compute noise scaling coefficients for each range noise line and save as NPZ """
         crop = {'IW':400, 'EW':200}[self.obsMode]
         swathBounds = self.import_swathBounds(polarization)
         nrv_line, nrv_pixel, nrv_noise = self.get_noise_range_vectors(polarization)
-        nrv_cal_s0 = self.get_calibration_vectors(polarization, nrv_line, nrv_pixel)
-        nrv_scall = self.get_noise_azimuth_vectors(polarization, nrv_line, nrv_pixel)
-        nrv_nesz = self.get_raw_nesz_vectors(nrv_noise, nrv_cal_s0, nrv_scall)
-        nrv_sigma_zero = self.get_raw_sigma_zero_vectors(polarization, nrv_line, nrv_pixel, nrv_cal_s0)
+        # zoom:
+        nrv_pixel2 = [np.arange(p[0], p[-1], zoom_step) for p in nrv_pixel]
+        nrv_noise2 = [interp1d(p, n)(p2) for (p,n,p2) in zip(nrv_pixel, nrv_noise, nrv_pixel2)]
+
+        nrv_cal_s0 = self.get_calibration_vectors(polarization, nrv_line, nrv_pixel2)
+        nrv_scall = self.get_noise_azimuth_vectors(polarization, nrv_line, nrv_pixel2)
+        nrv_nesz = self.get_shifted_nesz_vectors(polarization, nrv_line, nrv_pixel2, nrv_noise2, nrv_cal_s0, nrv_scall)
+        nrv_sigma_zero = self.get_raw_sigma_zero_vectors(
+            polarization, nrv_line, nrv_pixel2, nrv_cal_s0, average_lines=average_lines)
 
         results = {}
         results['IPFversion'] = self.IPFversion
         for swid in self.swath_ids:
-            swath_name = f'EW{swid}'
+            swath_name = f'{self.obsMode}{swid}'
             results[swath_name] = {
                 'sigma0':[],
                 'noiseEquivalentSigma0':[],
@@ -328,19 +338,138 @@ class Sentinel1CalVal(Sentinel1Image):
                 swathBound['lastRangeSample'],
             )
             for fal, lal, frs, lrs in zipped:
-                valid1 = np.where((nrv_line >= fal) * (nrv_line <= lal))[0]
+                valid1 = np.where(
+                    (nrv_line >= fal) * 
+                    (nrv_line <= lal) * 
+                    (nrv_line > (average_lines / 2)) *
+                    (nrv_line < (nrv_line[-1] - average_lines / 2)))[0]
                 for v1 in valid1:
-                    valid2 = np.where((nrv_pixel[v1] >= frs+crop) * (nrv_pixel[v1] <= lrs-crop))[0]
+                    line = nrv_line[v1]
+                    valid2 = np.where((nrv_pixel2[v1] >= frs+crop) * (nrv_pixel2[v1] <= lrs-crop))[0]
                     meanS0 = nrv_sigma_zero[v1][valid2]
                     meanN0 = nrv_nesz[v1][valid2]
-                    pixelIndex = nrv_pixel[v1][valid2]
+                    pixelIndex = nrv_pixel2[v1][valid2]
                     (scalingFactor,
                      correlationCoefficient,
                      fitResidual) = fit_noise_scaling_coeff(meanS0, meanN0, pixelIndex)
-                    if correlationCoefficient > min_corr_coef:
-                        results[swath_name]['sigma0'].append(meanS0)
-                        results[swath_name]['noiseEquivalentSigma0'].append(meanN0)
-                        results[swath_name]['scalingFactor'].append(scalingFactor)
-                        results[swath_name]['correlationCoefficient'].append(correlationCoefficient)
-                        results[swath_name]['fitResidual'].append(fitResidual)
+                    results[swath_name]['sigma0'].append(meanS0)
+                    results[swath_name]['noiseEquivalentSigma0'].append(meanN0)
+                    results[swath_name]['scalingFactor'].append(scalingFactor)
+                    results[swath_name]['correlationCoefficient'].append(correlationCoefficient)
+                    results[swath_name]['fitResidual'].append(fitResidual)
         np.savez(self.name.split('.')[0] + '_noiseScaling_new.npz', **results)
+
+    def experiment_powerBalancing(self, polarization, average_lines=777, zoom_step=2):
+        """ Compute power balancing coefficients for each range noise line and save as NPZ """
+        crop = {'IW':400, 'EW':200}[self.obsMode]
+        swathBounds = self.import_swathBounds(polarization)
+        nrv_line, nrv_pixel0, nrv_noise0 = self.get_noise_range_vectors(polarization)
+        # zoom:
+        nrv_pixel = [np.arange(p[0], p[-1], zoom_step) for p in nrv_pixel0]
+        nrv_noise = [interp1d(p, n)(p2) for (p,n,p2) in zip(nrv_pixel0, nrv_noise0, nrv_pixel)]
+
+        nrv_cal_s0 = self.get_calibration_vectors(polarization, nrv_line, nrv_pixel)
+        nrv_scall = self.get_noise_azimuth_vectors(polarization, nrv_line, nrv_pixel)
+        nrv_nesz = self.get_shifted_nesz_vectors(polarization, nrv_line, nrv_pixel, nrv_noise, nrv_cal_s0, nrv_scall)
+        nrv_sigma_zero = self.get_raw_sigma_zero_vectors(
+            polarization, nrv_line, nrv_pixel, nrv_cal_s0, average_lines=average_lines)
+        nrv_nesz_corrected = self.get_corrected_nesz_vectors(polarization, nrv_line, nrv_pixel, nrv_nesz, add_pb=False)
+        
+        num_swaths = len(self.swath_ids)
+        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
+
+        results = {}
+        results['IPFversion'] = self.IPFversion
+        tmp_results = {}
+        for swath_name in swath_names:
+            results[swath_name] = {
+                'sigma0':[],
+                'noiseEquivalentSigma0':[],
+                'correlationCoefficient':[],
+                'fitResidual':[],
+                'balancingPower': []}
+            tmp_results[swath_name] = {}
+
+        valid_lines = np.where(
+            (nrv_line > (average_lines / 2)) *
+            (nrv_line < (nrv_line[-1] - average_lines / 2)))[0]
+        for li in valid_lines:
+            line = nrv_line[li]
+            # find frs, lrs for all swaths at this line
+            frs = {}
+            lrs = {}
+            for swath_name in swath_names:
+                swathBound = swathBounds[swath_name]
+                zipped = zip(
+                    swathBound['firstAzimuthLine'],
+                    swathBound['lastAzimuthLine'],
+                    swathBound['firstRangeSample'],
+                    swathBound['lastRangeSample'],
+                )
+                for fal, lal, frstmp, lrstmp in zipped:
+                    if line>=fal and line<=lal:
+                        frs[swath_name] = frstmp
+                        lrs[swath_name] = lrstmp
+                        break
+
+            if swath_names != sorted(list(frs.keys())):
+                continue
+
+            blockN0 = np.zeros(nrv_nesz[li].shape) + np.nan
+            blockRN0 = np.zeros(nrv_nesz[li].shape) + np.nan
+            valid2_zero_size = False
+            fitCoefficients = []
+            for swath_name in swath_names:
+                swathBound = swathBounds[swath_name]
+                valid2 = np.where(
+                    (nrv_pixel[li] >= frs[swath_name]+crop) * 
+                    (nrv_pixel[li] <= lrs[swath_name]-crop))[0]
+                if valid2.size == 0:
+                    valid2_zero_size = True
+                    break
+                meanS0 = nrv_sigma_zero[li][valid2]
+                meanN0 = nrv_nesz_corrected[li][valid2]
+                blockN0[valid2] = nrv_nesz_corrected[li][valid2]
+                meanRN0 = nrv_nesz[li][valid2]
+                blockRN0[valid2] = nrv_nesz[li][valid2]
+                pixelIndex = nrv_pixel[li][valid2]
+                fitResults = np.polyfit(pixelIndex, meanS0 - meanN0, deg=1, full=True)
+                fitCoefficients.append(fitResults[0])
+                tmp_results[swath_name]['sigma0'] = meanS0
+                tmp_results[swath_name]['noiseEquivalentSigma0'] = meanRN0
+                tmp_results[swath_name]['correlationCoefficient'] = np.corrcoef(meanS0, meanN0)[0,1]
+                tmp_results[swath_name]['fitResidual'] = fitResults[1].item()
+
+            if valid2_zero_size:
+                continue
+
+            if np.any(np.isnan(fitCoefficients)):
+                continue
+
+            balancingPower = np.zeros(num_swaths)
+            for i in range(num_swaths - 1):
+                swath_name = f'{self.obsMode}{i+1}'
+                swathBound = swathBounds[swath_name]
+                power1 = fitCoefficients[i][0] * lrs[swath_name] + fitCoefficients[i][1]
+                # Compute power right to a boundary as slope*interswathBounds + residual coef.
+                power2 = fitCoefficients[i+1][0] * lrs[swath_name] + fitCoefficients[i+1][1]
+                balancingPower[i+1] = power2 - power1
+            balancingPower = np.cumsum(balancingPower)
+
+            for iSW, swath_name in zip(self.swath_ids, swath_names):
+                swathBound = swathBounds[swath_name]
+                valid2 = np.where((nrv_pixel[li] >= frs[swath_name]+crop) * (nrv_pixel[li] <= lrs[swath_name]-crop))[0]
+                blockN0[valid2] += balancingPower[iSW-1]
+
+            valid3 = (nrv_pixel[li] >= frs[f'{self.obsMode}2'] + crop)
+            powerBias = np.nanmean((blockRN0-blockN0)[valid3])
+            balancingPower += powerBias
+
+            for iSW, swath_name in zip(self.swath_ids, swath_names):
+                tmp_results[swath_name]['balancingPower'] = balancingPower[iSW-1]
+
+            for swath_name in swath_names:
+                for key in tmp_results[swath_name]:
+                    results[swath_name][key].append(tmp_results[swath_name][key])
+
+        np.savez(self.name.split('.')[0] + '_powerBalancing_new.npz', **results)
