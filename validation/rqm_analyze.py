@@ -40,7 +40,7 @@ def plot_results(d_plot, out_path):
     color_list = ['#459EB0', '#B0459E', '#9EB045']
     gap = 0.25
 
-    x = np.arange(len(d_plot.keys()))
+    x = np.arange(len(d_plot.keys())+1)
 
     esa_data = []
     nersc_data = []
@@ -51,22 +51,41 @@ def plot_results(d_plot, out_path):
         nersc_data.append((d_plot[key]['Mean_NERSC'], d_plot[key]['STD_NERSC']))
         diff_data.append((d_plot[key]['Mean_Diff'], d_plot[key]['STD_Diff']))
 
-    print(esa_data)
+
+
+    # append last bar with the mean
+    esa_m = np.nanmean(np.array(esa_data)[:, 0])
+    esa_std = np.nanmean(np.array(esa_data)[:, 1])
+    esa_data.append((esa_m, esa_std))
+
+    nersc_m = np.nanmean(np.array(nersc_data)[:, 0])
+    nersc_std = np.nanmean(np.array(nersc_data)[:, 1])
+    nersc_data.append((nersc_m, nersc_std))
+
+    diff_m = np.nanmean(np.array(diff_data)[:, 0])
+    diff_std = np.nanmean(np.array(diff_data)[:, 1])
+    diff_data.append((diff_m, diff_std))
+
+    print(np.array(esa_data)[:,0])
+    print(np.array(nersc_data)[:, 0])
 
     ax.bar(x, np.array(esa_data)[:,0],
            width=gap,
            color=color_list[0])#, yerr=esa_data[1])
 
-    ax.bar(x+gap, np.array(nersc_data)[:, 0],
+    ax.bar(x+gap, np.array(nersc_data)[:,0],
            width=gap,
            color=color_list[1])  # , yerr=esa_data[1])
 
-    ax.bar(x+gap*2, np.array(diff_data)[:, 0],
+    ax.bar(x+gap*2, np.array(diff_data)[:,0],
            width=gap,
            color=color_list[2])  # , yerr=esa_data[1])
 
+
     ax.set_xticks(x+gap)
-    ax.set_xticklabels(d_plot.keys())
+    labels = list(d_plot.keys())
+    labels.append('Mean')
+    ax.set_xticklabels(labels)
 
     ax.set_ylabel('RQM')
     ax.set_ylim(0,0.35)
@@ -153,4 +172,4 @@ for fmask in unq_file_masks:
     d_plot[fmask]['STD_Diff'] = std_diff
     #print('\n#####\nDifference mean/STD: %.3f/%.3f\n#####\n' % (m_diff, std_diff))
 
-plot_results(d_plot, 'agg_plot.png')
+plot_results(d_plot, 'agg_plot_%s.png' % args.platform)
