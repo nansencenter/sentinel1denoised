@@ -24,9 +24,6 @@ import json
 def parse_run_experiment_args():
     """ Parse input args for run_experiment_* scripts """
     parser = argparse.ArgumentParser(description='Quality assessment aggregated statistics from individual npz files')
-    parser.add_argument('platform', choices=['S1A', 'S1B'])
-    parser.add_argument('mode', choices=['EW', 'IW'])
-    parser.add_argument('polarization', choices=['HV', 'VH'])
     parser.add_argument('in_path')
     parser.add_argument('out_path')
     parser.add_argument('-c', '--cores', default=2, type=int,
@@ -45,7 +42,7 @@ def plot_results(d_plot, out_path):
     data.append(d_plot['Mean_Diff'])
     print(data)
 
-    color_list = ['g', 'b', 'r']
+    color_list = ['gray', 'b', 'r']
     gap = .8 / len(data)
     for i, row in enumerate(data):
         try:
@@ -57,7 +54,8 @@ def plot_results(d_plot, out_path):
                 color=color_list[i % len(color_list)])
 
     ax.set_ylabel('RQM')
-    ax.set_title('%s %s %s' % (args.platform, args.mode, args.polarization))
+    ax.set_ylim(0,0.35)
+    #ax.set_title('%s %s %s' % (args.platform, args.mode, args.polarization))
     #ax.set_xticks(ind + width)
     #labels = d_plot.keys()
     #ax.set_xticklabels(labels)
@@ -72,6 +70,13 @@ def get_mean_std(pref, data):
             res_ll.append(data[key])
     return np.nanmean(np.concatenate(res_ll)), np.nanstd(np.concatenate(res_ll)), np.concatenate(res_ll)
 
+def get_unique_pars(file_list):
+    ''' Get unique combinations of mode, polarization and polarization mode '''
+    ll = []
+    for ifile in file_list:
+        ll.append(os.path.basename(ifile).split('_2')[0])
+    return list(set(ll))
+
 pol_mode = {
     'VH': '1SDV',
     'HV': '1SDH',
@@ -79,49 +84,55 @@ pol_mode = {
 
 args = parse_run_experiment_args()
 os.makedirs(args.out_path, exist_ok=True)
-npz_list = glob.glob('%s/*%s*%s*%s*.npz' %
-                     (args.in_path, args.platform, args.mode, pol_mode[args.polarization]))
+npz_list = glob.glob('%s/*.npz' % args.in_path)
 
-total_esa_data = []
-total_nersc_data = []
-total_diff_data = []
+# Get unique combinations of mode, polarization and polarization mode and process them separately
+unq_file_masks = get_unique_pars(npz_list)
 
-res_d = {}
+# New file list
+for fmask in unq_file_masks:
+    npz_list = glob.glob('%s/*%s*.npz' % (args.in_path, fmask))
 
-# Create lists based on keys names
-a = npz_list[0]
-a = np.load(a)
-d_npz = dict(zip((k for k in a), (a[k] for k in a)))
+    total_esa_data = []
+    total_nersc_data = []
+    total_diff_data = []
 
-for key in d_npz.keys():
-    res_d['%s_ll' % key] = []
+    res_d = {}
 
-# Collect data for each margin
-for key in d_npz.keys():
-    for a in npz_list:
-        var_name = '%s_ll' % key
-        res_d[var_name].append(d_npz[key])
-    arr = np.concatenate(res_d[var_name])
-    res_d[var_name] = arr
+    # Create lists based on keys names
+    a = npz_list[0]
+    a = np.load(a)
+    d_npz = dict(zip((k for k in a), (a[k] for k in a)))
 
-d_plot = {}
+    for key in d_npz.keys():
+        res_d['%s_ll' % key] = []
 
-# Print results
-m_esa, std_esa, data_esa = get_mean_std('ESA', res_d)
-d_plot['Mean_ESA'] = m_esa
-d_plot['STD_ESA'] = std_esa
-print('\n#####\nESA mean/STD: %.3f/%.3f\n#####\n' % (m_esa, std_esa))
+    # Collect data for each margin
+    for key in d_npz.keys():
+        for a in npz_list:
+            var_name = '%s_ll' % key
+            res_d[var_name].append(d_npz[key])
+        arr = np.concatenate(res_d[var_name])
+        res_d[var_name] = arr
 
-m_nersc, std_nersc, data_nersc = get_mean_std('NERSC', res_d)
-d_plot['Mean_NERSC'] = m_nersc
-d_plot['STD_NERSC'] = std_nersc
-print('\n#####\nNERSC mean/STD: %.3f/%.3f\n#####\n' % (m_nersc, std_nersc))
+    d_plot = {}
 
-diff = data_esa - data_nersc
-m_diff = np.nanmean(diff)
-std_diff = np.nanstd(diff)
-d_plot['Mean_Diff'] = m_diff
-d_plot['STD_Diff'] = std_diff
-print('\n#####\nDifference mean/STD: %.3f/%.3f\n#####\n' % (m_diff, std_diff))
+    # Print results
+    m_esa, std_esa, data_esa = get_mean_std('ESA', res_d)
+    d_plot['Mean_ESA'] = m_esa
+    d_plot['STD_ESA'] = std_esa
+    print('\n#####\nESA mean/STD: %.3f/%.3f\n#####\n' % (m_esa, std_esa))
 
-plot_results(d_plot, 'test_plot.png')
+    m_nersc, std_nersc, data_nersc = get_mean_std('NERSC', res_d)
+    d_plot['Mean_NERSC'] = m_nersc
+    d_plot['STD_NERSC'] = std_nersc
+    print('\n#####\nNERSC mean/STD: %.3f/%.3f\n#####\n' % (m_nersc, std_nersc))
+
+    diff = data_esa - data_nersc
+    m_diff = np.nanmean(diff)
+    std_diff = np.nanstd(diff)
+    d_plot['Mean_Diff'] = m_diff
+    d_plot['STD_Diff'] = std_diff
+    print('\n#####\nDifference mean/STD: %.3f/%.3f\n#####\n' % (m_diff, std_diff))
+
+    plot_results(d_plot, '%s_plot.png' % fmask)
