@@ -28,9 +28,9 @@ class Sentinel1CalVal(Sentinel1Image):
 
         for pix, n in zip(noiseRangeVector['pixel'], noiseRangeVector['noiseRangeLut']):
             n = np.array(n)
-            gpi = np.where(n > 0)[0]
-            noise.append(n[gpi])
-            pixel.append(np.array(pix)[gpi])
+            n[n == 0] = np.nan
+            noise.append(n)
+            pixel.append(np.array(pix))
 
         return line, pixel, noise
 
@@ -42,8 +42,8 @@ class Sentinel1CalVal(Sentinel1Image):
         swathBounds = self.import_swathBounds(polarization)
         for iSW in self.swath_ids:
             swathBound = swathBounds['%s%s' % (self.obsMode, iSW)]
-            linerv_gpi = ((line >= min(swathBound['firstAzimuthLine'])) *
-                            (line <= max(swathBound['lastAzimuthLine'])))
+            line_gpi = ((line >= min(swathBound['firstAzimuthLine'])) *
+                        (line <= max(swathBound['lastAzimuthLine'])))
             cal_line = np.array(calibrationVector['line'])
             cal_line_gpi = ((cal_line >= min(swathBound['firstAzimuthLine'])) *
                             (cal_line <= max(swathBound['lastAzimuthLine'])))
@@ -61,12 +61,12 @@ class Sentinel1CalVal(Sentinel1Image):
                 swathBound['lastRangeSample'],
             )
             for fal, lal, frs, lrs in zipped:
-                linerv_gpi = np.where((line >= fal) * (line <= lal))[0]
-                for linerv_i in linerv_gpi:
-                    pixelrv_gpi = np.where((pixel[linerv_i] >= frs) * (pixel[linerv_i] <= lrs))[0]
-                    cal_s0[linerv_i][pixelrv_gpi] = cal_s0_interp(
-                        line[linerv_i],
-                        pixel[linerv_i][pixelrv_gpi])
+                line_gpi = np.where((line >= fal) * (line <= lal))[0]
+                for line_i in line_gpi:
+                    pixel_gpi = np.where((pixel[line_i] >= frs) * (pixel[line_i] <= lrs))[0]
+                    cal_s0[line_i][pixel_gpi] = cal_s0_interp(
+                        line[line_i],
+                        pixel[line_i][pixel_gpi])
         return cal_s0
 
     def get_noise_azimuth_vectors(self, polarization, line, pixel):
@@ -88,10 +88,10 @@ class Sentinel1CalVal(Sentinel1Image):
                 else:
                     nav_interp = lambda x: z
 
-                linerv_gpi = np.where((line >= fal) * (line <= lal))[0]
-                for linerv_i in linerv_gpi:
-                    pixelrv_gpi = np.where((pixel[linerv_i] >= frs) * (pixel[linerv_i] <= lrs))[0]
-                    scall[linerv_i][pixelrv_gpi] = nav_interp(line[linerv_i])
+                line_gpi = np.where((line >= fal) * (line <= lal))[0]
+                for line_i in line_gpi:
+                    pixel_gpi = np.where((pixel[line_i] >= frs) * (pixel[line_i] <= lrs))[0]
+                    scall[line_i][pixel_gpi] = nav_interp(line[line_i])
         return scall
 
     def calibrate_noise_vectors(self, noise, cal_s0, scall):
@@ -192,7 +192,10 @@ class Sentinel1CalVal(Sentinel1Image):
                 valid1 = np.where((line >= fal) * (line <= lal))[0]
                 for v1 in valid1:
                     valid_lin = line[v1]
-                    valid2 = np.where((pixel[v1] >= frs) * (pixel[v1] <= lrs))[0]
+                    valid2 = np.where(
+                        (pixel[v1] >= frs) *
+                        (pixel[v1] <= lrs) *
+                        (np.isfinite(noise[v1])))[0]
                     valid_pix = pixel[v1][valid2]
 
                     ba = ba_interpolator(valid_lin, valid_pix).flatten()
@@ -343,7 +346,10 @@ class Sentinel1CalVal(Sentinel1Image):
                     (line > (average_lines / 2)) *
                     (line < (line[-1] - average_lines / 2)))[0]
                 for v1 in valid1:
-                    valid2 = np.where((pixel[v1] >= frs+crop) * (pixel[v1] <= lrs-crop))[0]
+                    valid2 = np.where(
+                        (pixel[v1] >= frs+crop) *
+                        (pixel[v1] <= lrs-crop) *
+                        np.isfinite(nesz[v1]))[0]
                     meanS0 = sigma_zero[v1][valid2]
                     meanN0 = nesz[v1][valid2]
                     pixelIndex = pixel[v1][valid2]
@@ -420,7 +426,8 @@ class Sentinel1CalVal(Sentinel1Image):
                 swathBound = swathBounds[swath_name]
                 valid2 = np.where(
                     (pixel[li] >= frs[swath_name]+crop) *
-                    (pixel[li] <= lrs[swath_name]-crop))[0]
+                    (pixel[li] <= lrs[swath_name]-crop) *
+                    np.isfinite(nesz[li]))[0]
                 if valid2.size == 0:
                     valid2_zero_size = True
                     break
@@ -455,7 +462,10 @@ class Sentinel1CalVal(Sentinel1Image):
 
             for iSW, swath_name in zip(self.swath_ids, swath_names):
                 swathBound = swathBounds[swath_name]
-                valid2 = np.where((pixel[li] >= frs[swath_name]+crop) * (pixel[li] <= lrs[swath_name]-crop))[0]
+                valid2 = np.where(
+                    (pixel[li] >= frs[swath_name]+crop) *
+                    (pixel[li] <= lrs[swath_name]-crop) *
+                    np.isfinite(nesz[li]))[0]
                 blockN0[valid2] += balancingPower[iSW-1]
 
             valid3 = (pixel[li] >= frs[f'{self.obsMode}2'] + crop)
