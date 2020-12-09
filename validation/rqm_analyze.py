@@ -1,7 +1,8 @@
 #!/usr/bin/env python
-""" Range quality metric averaging from json files
+""" Range quality metric plotting and averaging for each sensing mode
+    for platform [S1A/S1B] from json files
 
-    run example: run rqm_analyze.py input/json/path output/path
+    run example: run rqm_analyze.py platform [S1A/S1B] input/json/path output/path
 
     output:
             png figure with mean values, STD and mean signed difference
@@ -24,7 +25,7 @@ import json
 def parse_run_experiment_args():
     """ Parse input args for run_experiment_* scripts """
     parser = argparse.ArgumentParser(description='Quality assessment aggregated statistics from individual npz files')
-    parser.add_argument('platform')
+    parser.add_argument('platform', choices=['S1A','S1B'])
     parser.add_argument('in_path')
     parser.add_argument('out_path')
     parser.add_argument('-c', '--cores', default=2, type=int,
@@ -71,15 +72,15 @@ def plot_results(d_plot, out_path):
 
     ax.bar(x, np.array(esa_data)[:,0],
            width=gap,
-           color=color_list[0])#, yerr=esa_data[1])
+           color=color_list[0], yerr=np.array(esa_data)[:,1])
 
     ax.bar(x+gap, np.array(nersc_data)[:,0],
            width=gap,
-           color=color_list[1])  # , yerr=esa_data[1])
+           color=color_list[1], yerr=np.array(nersc_data)[:,1])
 
     ax.bar(x+gap*2, np.array(diff_data)[:,0],
            width=gap,
-           color=color_list[2])  # , yerr=esa_data[1])
+           color=color_list[2], yerr=np.array(diff_data)[:,1])
 
 
     ax.set_xticks(x+gap)
