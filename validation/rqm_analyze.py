@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """ Range quality metric plotting and averaging for each sensing mode
-    for platform [S1A/S1B] from json files
+    for platform [S1A/S1B] from npz files
 
     run example: run rqm_analyze.py platform [S1A/S1B] input/json/path output/path
 
@@ -26,6 +26,8 @@ def parse_run_experiment_args():
     """ Parse input args for run_experiment_* scripts """
     parser = argparse.ArgumentParser(description='Quality assessment aggregated statistics from individual npz files')
     parser.add_argument('platform', choices=['S1A','S1B'])
+    parser.add_argument('mode', choices=['EW', 'IW'])
+    parser.add_argument('pol', choices=['VH', 'HV'])
     parser.add_argument('in_path')
     parser.add_argument('out_path')
     parser.add_argument('-c', '--cores', default=2, type=int,
@@ -82,7 +84,6 @@ def plot_results(d_plot, out_path):
            width=gap,
            color=color_list[2], yerr=np.array(diff_data)[:,1])
 
-
     ax.set_xticks(x+gap)
     labels = list(d_plot.keys())
     labels.append('Mean')
@@ -90,7 +91,7 @@ def plot_results(d_plot, out_path):
 
     ax.set_ylabel('RQM')
     ax.set_ylim(0,0.35)
-    ax.set_title('RQM statistics')
+    ax.set_title('RQM: %s %s %s' % (args.platform, args.mode, args.pol))
 
     ax.legend(('ESA', 'NERSC', 'Diff.'))
 
@@ -103,11 +104,11 @@ def get_mean_std(pref, data):
             res_ll.append(data[key])
     return np.nanmean(np.concatenate(res_ll)), np.nanstd(np.concatenate(res_ll)), np.concatenate(res_ll)
 
-def get_unique_pars(file_list):
+def get_unique_regions(file_list):
     ''' Get unique combinations of mode, polarization and polarization mode '''
     ll = []
     for ifile in file_list:
-        ll.append(os.path.basename(ifile).split('_2')[0])
+        ll.append(os.path.basename(ifile).split('_')[-2])
     return list(set(ll))
 
 pol_mode = {
@@ -117,11 +118,10 @@ pol_mode = {
 
 args = parse_run_experiment_args()
 os.makedirs(args.out_path, exist_ok=True)
-npz_list = glob.glob('%s/*%s*.npz' % (args.in_path, args.platform))
+npz_list = glob.glob('%s/*%s*%s*%s*.npz' % (args.in_path, args.platform, args.mode, pol_mode[args.pol]))
 
 # Get unique combinations of mode, polarization and polarization mode and process them separately
-unq_file_masks = get_unique_pars(npz_list)
-
+unq_file_masks = get_unique_regions(npz_list)
 
 d_plot = {}
 
@@ -151,10 +151,10 @@ for fmask in unq_file_masks:
         arr = np.concatenate(res_d[var_name])
         res_d[var_name] = arr
 
-
     d_plot[fmask] = {}
     d_plot[fmask]['Num_images'] = len(npz_list)
     d_plot[fmask]['Image_IDs'] = [os.path.basename(il).split('.')[0] for il in npz_list]
+
     # Print results
     m_esa, std_esa, data_esa = get_mean_std('ESA', res_d)
     d_plot[fmask]['Mean_ESA'] = m_esa
@@ -173,4 +173,4 @@ for fmask in unq_file_masks:
     d_plot[fmask]['STD_Diff'] = std_diff
     #print('\n#####\nDifference mean/STD: %.3f/%.3f\n#####\n' % (m_diff, std_diff))
 
-plot_results(d_plot, 'agg_plot_%s.png' % args.platform)
+plot_results(d_plot, '%s/%s_%s_%s_agg_plot.png' % (args.out_path, args.platform, args.mode, args.pol))
