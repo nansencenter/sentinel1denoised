@@ -30,6 +30,8 @@ def parse_run_experiment_args():
     parser.add_argument('pol', choices=['VH', 'HV'])
     parser.add_argument('in_path')
     parser.add_argument('out_path')
+    parser.add_argument('y_min')
+    parser.add_argument('y_max')
     parser.add_argument('-c', '--cores', default=2, type=int,
                         help='Number of cores for parallel computation')
     return parser.parse_args()
@@ -88,7 +90,7 @@ def plot_results(d_plot, out_path):
     ax.set_xticklabels(labels)
 
     ax.set_ylabel('RQM')
-    ax.set_ylim(-0.1, 0.45)
+    ax.set_ylim(float(args.y_min), float(args.y_max))
     ax.set_title('RQM: %s %s %s' % (args.platform, args.mode, args.pol))
 
     ax.legend(('ESA', 'NERSC', 'Diff.'))
@@ -172,4 +174,4 @@ for fmask in unq_file_masks:
     d_plot[fmask]['STD_Diff'] = std_diff
     #print('\n#####\nDifference mean/STD: %.3f/%.3f\n#####\n' % (m_diff, std_diff))
 
-plot_results(d_plot, '%s/%s_%s_%s_agg_plot.png' % (args.out_path, args.platform, args.mode, args.pol))
+plot_results(d_plot, '%s/NEW_%s_%s_%s_agg_plot.png' % (args.out_path, args.platform, args.mode, args.pol))

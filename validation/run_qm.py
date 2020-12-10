@@ -51,7 +51,7 @@ def parse_run_experiment_args():
     parser.add_argument('polarization', choices=['HV', 'VH'])
     parser.add_argument('inp_dir')
     parser.add_argument('out_dir')
-    parser.add_argument('-c', '--cores', default=5, type=int,
+    parser.add_argument('-c', '--cores', default=3, type=int,
                         help='Number of cores for parallel computation')
     return parser.parse_args()
 
