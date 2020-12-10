@@ -88,7 +88,7 @@ def plot_results(d_plot, out_path):
     ax.set_xticklabels(labels)
 
     ax.set_ylabel('RQM')
-    ax.set_ylim(0,0.35)
+    ax.set_ylim(0,0.45)
     ax.set_title('RQM: %s %s %s' % (args.platform, args.mode, args.pol))
 
     ax.legend(('ESA', 'NERSC', 'Diff.'))
