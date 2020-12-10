@@ -88,7 +88,7 @@ def plot_results(d_plot, out_path):
     ax.set_xticklabels(labels)
 
     ax.set_ylabel('RQM')
-    ax.set_ylim(0,0.45)
+    ax.set_ylim(-0.1, 0.45)
     ax.set_title('RQM: %s %s %s' % (args.platform, args.mode, args.pol))
 
     ax.legend(('ESA', 'NERSC', 'Diff.'))
@@ -100,6 +100,7 @@ def get_mean_std(pref, data):
     for key in data.keys():
         if pref in key:
             res_ll.append(data[key])
+            print(data[key])
     return np.nanmean(np.concatenate(res_ll)), np.nanstd(np.concatenate(res_ll)), np.concatenate(res_ll)
 
 def get_unique_regions(file_list):
@@ -119,13 +120,13 @@ os.makedirs(args.out_path, exist_ok=True)
 npz_list = glob.glob('%s/*%s*%s*%s*.npz' % (args.in_path, args.platform, args.mode, pol_mode[args.pol]))
 
 # Get unique combinations of mode, polarization and polarization mode and process them separately
-unq_file_masks = get_unique_regions(npz_list)
+unq_file_masks = sorted(get_unique_regions(npz_list))
 
 d_plot = {}
 
 for fmask in unq_file_masks:
     print(fmask)
-    npz_list = glob.glob('%s/*%s*.npz' % (args.in_path, fmask))
+    npz_list = glob.glob('%s/*%s*%s*%s*%s*.npz' % (args.in_path, args.platform, args.mode, pol_mode[args.pol], fmask))
 
     total_esa_data = []
     total_nersc_data = []
