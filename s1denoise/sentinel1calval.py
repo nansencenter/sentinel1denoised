@@ -238,9 +238,8 @@ class Sentinel1CalVal(Sentinel1Image):
                     pixel_shift = minimize(cost, 0, args=(valid_pix[skip:-skip], noise_interpolator, apg[skip:-skip])).x[0]
 
                     noise_shifted0 = noise_interpolator(valid_pix + pixel_shift)
-                    p = np.polyfit(apg, noise_shifted0, 1)
-                    noise_shifted1 = np.polyval(p, apg)
-                    noise_shifted[v1][valid2] = noise_shifted1
+                    noise_shifted[v1][valid2] = noise_shifted0
+
         return noise_shifted
 
     def get_corrected_nesz_vectors(self, polarization, line, pixel, nesz, add_pb=True):
@@ -266,13 +265,13 @@ class Sentinel1CalVal(Sentinel1Image):
                         nesz_corrected[v1][valid2] += pb[swath_name]
         return nesz_corrected
 
-    def get_raw_sigma_zero_vectors(self, polarization, line, pixel, cal_s0, average_lines=111):
+    def get_raw_sigma0_vectors(self, polarization, line, pixel, cal_s0, average_lines=111):
         """ Read DN_ values from input GeoTIff for a given lines, average in azimuth direction,
         compute sigma0, and return sigma0 for given pixels
 
         """
         ws2 = np.floor(average_lines / 2)
-        raw_sigma_zero = [np.zeros(p.size)+np.nan for p in pixel]
+        raw_sigma0 = [np.zeros(p.size)+np.nan for p in pixel]
         src_filename = self.bands()[self.get_band_number(f'DN_{polarization}')]['SourceFilename']
         ds = gdal.Open(src_filename)
         for i in range(line.shape[0]):
@@ -283,8 +282,8 @@ class Sentinel1CalVal(Sentinel1Image):
                 dn_mean = np.zeros(self.shape()[1]) + np.nan
             else:
                 dn_mean = line_data.mean(axis=0)
-            raw_sigma_zero[i] = dn_mean[pixel[i]]**2 / cal_s0[i]**2
-        return raw_sigma_zero
+            raw_sigma0[i] = dn_mean[pixel[i]]**2 / cal_s0[i]**2
+        return raw_sigma0
 
     def compute_rqm(self, s0, polarization, line, pixel, num_px=100, **kwargs):
         """ Compute Range Quality Metric from the input sigma0 """
@@ -321,10 +320,10 @@ class Sentinel1CalVal(Sentinel1Image):
         noise_shifted = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
         nesz_shifted = self.calibrate_noise_vectors(noise_shifted, cal_s0, scall)
         nesz_corrected = self.get_corrected_nesz_vectors(polarization, line, pixel, nesz_shifted)
-        sigma_zero = self.get_raw_sigma_zero_vectors(polarization, line, pixel, cal_s0)
-        s0_esa   = [s0 - n0 for (s0,n0) in zip(sigma_zero, nesz)]
-        s0_shift = [s0 - n0 for (s0,n0) in zip(sigma_zero, nesz_shifted)]
-        s0_nersc = [s0 - n0 for (s0,n0) in zip(sigma_zero, nesz_corrected)]
+        sigma0 = self.get_raw_sigma0_vectors(polarization, line, pixel, cal_s0)
+        s0_esa   = [s0 - n0 for (s0,n0) in zip(sigma0, nesz)]
+        s0_shift = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_shifted)]
+        s0_nersc = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_corrected)]
         q = [self.compute_rqm(s0, polarization, line, pixel, **kwargs) for s0 in [s0_esa, s0_shift, s0_nersc]]
 
         q_all = {}
@@ -339,16 +338,18 @@ class Sentinel1CalVal(Sentinel1Image):
         """ Compute noise scaling coefficients for each range noise line and save as NPZ """
         crop = {'IW':400, 'EW':200}[self.obsMode]
         swathBounds = self.import_swathBounds(polarization)
-        line, pixelrv0, noise0 = self.get_noise_range_vectors(polarization)
+        line, pixel0, noise0 = self.get_noise_range_vectors(polarization)
+        cal_s00 = self.get_calibration_vectors(polarization, line, pixel0)
         # zoom:
-        pixel = [np.arange(p[0], p[-1], zoom_step) for p in pixelrv0]
-        noise = [interp1d(p, n)(p2) for (p,n,p2) in zip(pixelrv0, noise0, pixel)]
+        pixel = [np.arange(p[0], p[-1], zoom_step) for p in pixel0]
+        noise = [interp1d(p, n)(p2) for (p,n,p2) in zip(pixel0, noise0, pixel)]
+        cal_s0 = [interp1d(p, n)(p2) for (p,n,p2) in zip(pixel0, cal_s00, pixel)]
+
         noise_shifted = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
-        cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
         scall = self.get_noise_azimuth_vectors(polarization, line, pixel)
         nesz = self.calibrate_noise_vectors(noise_shifted, cal_s0, scall)
 
-        sigma_zero = self.get_raw_sigma_zero_vectors(
+        sigma0 = self.get_raw_sigma0_vectors(
             polarization, line, pixel, cal_s0, average_lines=average_lines)
 
         results = {}
@@ -379,7 +380,7 @@ class Sentinel1CalVal(Sentinel1Image):
                         (pixel[v1] >= frs+crop) *
                         (pixel[v1] <= lrs-crop) *
                         np.isfinite(nesz[v1]))[0]
-                    meanS0 = sigma_zero[v1][valid2]
+                    meanS0 = sigma0[v1][valid2]
                     meanN0 = nesz[v1][valid2]
                     pixelIndex = pixel[v1][valid2]
                     (scalingFactor,
@@ -396,16 +397,18 @@ class Sentinel1CalVal(Sentinel1Image):
         """ Compute power balancing coefficients for each range noise line and save as NPZ """
         crop = {'IW':400, 'EW':200}[self.obsMode]
         swathBounds = self.import_swathBounds(polarization)
-        line, pixelrv0, noise0 = self.get_noise_range_vectors(polarization)
+        line, pixel0, noise0 = self.get_noise_range_vectors(polarization)
+        cal_s00 = self.get_calibration_vectors(polarization, line, pixel0)
         # zoom:
-        pixel = [np.arange(p[0], p[-1], zoom_step) for p in pixelrv0]
-        noise = [interp1d(p, n)(p2) for (p,n,p2) in zip(pixelrv0, noise0, pixel)]
+        pixel = [np.arange(p[0], p[-1], zoom_step) for p in pixel0]
+        noise = [interp1d(p, n)(p2) for (p,n,p2) in zip(pixel0, noise0, pixel)]
+        cal_s0 = [interp1d(p, n)(p2) for (p,n,p2) in zip(pixel0, cal_s00, pixel)]
+
         noise_shifted = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
-        cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
         scall = self.get_noise_azimuth_vectors(polarization, line, pixel)
         nesz = self.calibrate_noise_vectors(noise_shifted, cal_s0, scall)
         nesz_corrected = self.get_corrected_nesz_vectors(polarization, line, pixel, nesz, add_pb=False)
-        sigma_zero = self.get_raw_sigma_zero_vectors(
+        sigma0 = self.get_raw_sigma0_vectors(
             polarization, line, pixel, cal_s0, average_lines=average_lines)
 
         num_swaths = len(self.swath_ids)
@@ -460,7 +463,7 @@ class Sentinel1CalVal(Sentinel1Image):
                 if valid2.size == 0:
                     valid2_zero_size = True
                     break
-                meanS0 = sigma_zero[li][valid2]
+                meanS0 = sigma0[li][valid2]
                 meanN0 = nesz_corrected[li][valid2]
                 blockN0[valid2] = nesz_corrected[li][valid2]
                 meanRN0 = nesz[li][valid2]
@@ -536,7 +539,7 @@ class Sentinel1CalVal(Sentinel1Image):
                 scall_fs[fal:lal+1, frs:lrs+1] = z_arr
         return scall_fs
 
-    def interp_nrv_full_size(self, z, line, pixel, polarization, scales=None, offsets=None, power=1):
+    def interp_nrv_full_size(self, z, line, pixel, polarization, power=1):
         z_fs = np.zeros(self.shape()) + np.nan
         swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
         for swath_name in swath_names:
@@ -546,10 +549,6 @@ class Sentinel1CalVal(Sentinel1Image):
                 pix_vec_fr = np.arange(frs, lrs+1)
                 lin_vec_fr = np.arange(fal, lal+1)
                 z_arr_fs = z_interp2(lin_vec_fr, pix_vec_fr)
-                if scales is not None:
-                    z_arr_fs *= scales[swath_name]
-                if offsets is not None:
-                    z_arr_fs += offsets[swath_name]
                 if power != 1:
                     z_arr_fs = z_arr_fs**power
                 z_fs[fal:lal+1, frs:lrs+1] = z_arr_fs
@@ -562,25 +561,35 @@ class Sentinel1CalVal(Sentinel1Image):
         s0 = np.array(calibrationVector['sigmaNought'])
         return self.interp_nrv_full_size(s0, line, pixel, polarization, power=power)
 
-    def get_nesz_full_size(self, polarization, shift_lut=False, noise_scaling=False, add_pb=False):
+    def get_nesz_full_size(self, polarization, shift_lut=False):
         """ Get NESZ at full resolution and full size matrix """
         line, pixel, noise = self.get_noise_range_vectors(polarization)
         if shift_lut:
             noise = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
 
-        scales = None
-        offsets = None
-        if noise_scaling:
-            ns, pb = self.import_denoisingCoefficients(polarization)[:2]
-            scales = ns
-            if add_pb:
-                offsets = pb
-
-        nesz_fs = self.interp_nrv_full_size(noise, line, pixel, polarization, scales=scales, offsets=offsets)
+        nesz_fs = self.interp_nrv_full_size(noise, line, pixel, polarization)
         nesz_fs *= self.get_scalloping_full_size(polarization)
         nesz_fs /= self.get_calibration_full_size(polarization, power=2)
 
         return nesz_fs
+
+    def get_corrected_nesz_full_size(self, polarization, nesz):
+        nesz_corrected = np.array(nesz)
+        swathBounds = self.import_swathBounds(polarization)
+        ns, pb = self.import_denoisingCoefficients(polarization)[:2]
+        for swid in self.swath_ids:
+            swath_name = f'{self.obsMode}{swid}'
+            swathBound = swathBounds[swath_name]
+            zipped = zip(
+                swathBound['firstAzimuthLine'],
+                swathBound['lastAzimuthLine'],
+                swathBound['firstRangeSample'],
+                swathBound['lastRangeSample'],
+            )
+            for fal, lal, frs, lrs in zipped:
+                nesz_corrected[fal:lal+1, frs:lrs+1] *= ns[swath_name]
+                nesz_corrected[fal:lal+1, frs:lrs+1] += pb[swath_name]
+        return nesz_corrected
 
     def get_raw_sigma0_full_size(self, polarization):
         src_filename = self.bands()[self.get_band_number(f'DN_{polarization}')]['SourceFilename']
