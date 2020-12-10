@@ -34,40 +34,69 @@ class Sentinel1CalVal(Sentinel1Image):
 
         return line, pixel, noise
 
+    def get_swath_interpolator(self, polarization, swath_name, line, pixel, z):
+        """ Prepare interpolators for one swath """
+        swathBounds = self.import_swathBounds(polarization)
+        swathBound = swathBounds[swath_name]
+        swath_coords = (
+            swathBound['firstAzimuthLine'],
+            swathBound['lastAzimuthLine'],
+            swathBound['firstRangeSample'],
+            swathBound['lastRangeSample'],
+        )
+        pix_vec_fr = np.arange(min(swathBound['firstRangeSample']),
+                               max(swathBound['lastRangeSample'])+1)
+
+        z_vecs = []
+        swath_lines = []
+        for fal, lal, frs, lrs in zip(*swath_coords):
+            valid1 = np.where((line >= fal) * (line <= lal))[0]
+            if valid1.size == 0:
+                continue
+            for v1 in valid1:
+                swath_lines.append(line[v1])
+                valid2 = np.where(
+                    (pixel[v1] >= frs) *
+                    (pixel[v1] <= lrs) *
+                    np.isfinite(z[v1]))[0]
+                # interpolator for one line
+                z_interp1 = InterpolatedUnivariateSpline(pixel[v1][valid2], z[v1][valid2])
+                z_vecs.append(z_interp1(pix_vec_fr))
+        # interpolator for one subswath
+        z_interp2 = RectBivariateSpline(swath_lines, pix_vec_fr, np.array(z_vecs))
+        return z_interp2, swath_coords
+
     def get_calibration_vectors(self, polarization, line, pixel):
         """ Interpolate sigma0 calibration from XML file to the input line/pixel coordinates """
-        cal_s0 = [np.zeros(p.size)+np.nan for p in pixel]
+        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
         calibrationVector = self.import_calibrationVector(polarization)
-        cal_s0arr = np.array(calibrationVector['sigmaNought'])
-        swathBounds = self.import_swathBounds(polarization)
-        for iSW in self.swath_ids:
-            swathBound = swathBounds['%s%s' % (self.obsMode, iSW)]
-            line_gpi = ((line >= min(swathBound['firstAzimuthLine'])) *
-                        (line <= max(swathBound['lastAzimuthLine'])))
-            cal_line = np.array(calibrationVector['line'])
-            cal_line_gpi = ((cal_line >= min(swathBound['firstAzimuthLine'])) *
-                            (cal_line <= max(swathBound['lastAzimuthLine'])))
-            cal_line = cal_line[cal_line_gpi]
-            cal_pixel = np.array(calibrationVector['pixel'])[cal_line_gpi][0]
-            cal_pixel_gpi = ((cal_pixel >= min(swathBound['firstRangeSample'])) *
-                             (cal_pixel <= max(swathBound['lastRangeSample'])))
-            cal_pixel = cal_pixel[cal_pixel_gpi]
-            cal_s0_pixlin = cal_s0arr[cal_line_gpi][:, cal_pixel_gpi]
-            cal_s0_interp = RectBivariateSpline(cal_line, cal_pixel, cal_s0_pixlin, kx=1, ky=1)
-            zipped = zip(
-                swathBound['firstAzimuthLine'],
-                swathBound['lastAzimuthLine'],
-                swathBound['firstRangeSample'],
-                swathBound['lastRangeSample'],
-            )
-            for fal, lal, frs, lrs in zipped:
-                line_gpi = np.where((line >= fal) * (line <= lal))[0]
-                for line_i in line_gpi:
-                    pixel_gpi = np.where((pixel[line_i] >= frs) * (pixel[line_i] <= lrs))[0]
-                    cal_s0[line_i][pixel_gpi] = cal_s0_interp(
-                        line[line_i],
-                        pixel[line_i][pixel_gpi])
-        return cal_s0
+        s0line = np.array(calibrationVector['line'])
+        s0pixel = np.array(calibrationVector['pixel'])
+        sigma0 = np.array(calibrationVector['sigmaNought'])
+
+        swath_interpolators = []
+        for swath_name in swath_names:
+            z_interp2, swath_coords = self.get_swath_interpolator(
+                polarization, swath_name, s0line, s0pixel, sigma0)
+            swath_interpolators.append(z_interp2)
+
+        cal = []
+        for l, p in zip(line, pixel):
+            cal_line = np.zeros(p.size) + np.nan
+            pix_brd = p[np.where(np.diff(p) == 1)[0]]
+            for swid in range(5):
+                if swid == 0:
+                    frs = 0
+                else:
+                    frs = pix_brd[swid-1]+1
+                if swid == 4:
+                    lrs = p[-1]
+                else:
+                    lrs = pix_brd[swid]
+                pixel_gpi = (p >= frs) * (p <= lrs)
+                cal_line[pixel_gpi] = swath_interpolators[swid](l, p[pixel_gpi]).flatten()
+            cal.append(cal_line)
+        return cal
 
     def get_noise_azimuth_vectors(self, polarization, line, pixel):
         """ Interpolate scalloping noise from XML files to input pixel/lines coords """
@@ -480,3 +509,87 @@ class Sentinel1CalVal(Sentinel1Image):
                     results[swath_name][key].append(tmp_results[swath_name][key])
 
         np.savez(self.name.split('.')[0] + '_powerBalancing_new.npz', **results)
+
+    def get_scalloping_full_size(self, polarization):
+        """ Interpolate noise azimuth vector to full resolution for all blocks """
+        scall_fs = np.zeros(self.shape()) + np.nan
+        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
+        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
+        for swath_name in swath_names:
+            nav = noiseAzimuthVector[swath_name]
+            zipped = zip(
+                nav['firstAzimuthLine'],
+                nav['lastAzimuthLine'],
+                nav['firstRangeSample'],
+                nav['lastRangeSample'],
+                nav['line'],
+                nav['noiseAzimuthLut'],
+            )
+            for fal, lal, frs, lrs, y, z in zipped:
+                if isinstance(y, list):
+                    nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
+                else:
+                    nav_interp = lambda x: z
+                lin_vec_fr = np.arange(fal, lal+1)
+                z_vec_fr = nav_interp(lin_vec_fr)
+                z_arr = np.repeat([z_vec_fr], (lrs-frs+1), axis=0).T
+                scall_fs[fal:lal+1, frs:lrs+1] = z_arr
+        return scall_fs
+
+    def interp_nrv_full_size(self, z, line, pixel, polarization, scales=None, offsets=None, power=1):
+        z_fs = np.zeros(self.shape()) + np.nan
+        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
+        for swath_name in swath_names:
+            z_interp2, swath_coords = self.get_swath_interpolator(
+                polarization, swath_name, line, pixel, z)
+            for fal, lal, frs, lrs in zip(*swath_coords):
+                pix_vec_fr = np.arange(frs, lrs+1)
+                lin_vec_fr = np.arange(fal, lal+1)
+                z_arr_fs = z_interp2(lin_vec_fr, pix_vec_fr)
+                if scales is not None:
+                    z_arr_fs *= scales[swath_name]
+                if offsets is not None:
+                    z_arr_fs += offsets[swath_name]
+                if power != 1:
+                    z_arr_fs = z_arr_fs**power
+                z_fs[fal:lal+1, frs:lrs+1] = z_arr_fs
+        return z_fs
+
+    def get_calibration_full_size(self, polarization, power=1):
+        calibrationVector = self.import_calibrationVector(polarization)
+        line = np.array(calibrationVector['line'])
+        pixel = np.array(calibrationVector['pixel'])
+        s0 = np.array(calibrationVector['sigmaNought'])
+        return self.interp_nrv_full_size(s0, line, pixel, polarization, power=power)
+
+    def get_nesz_full_size(self, polarization, shift_lut=False, noise_scaling=False, add_pb=False):
+        """ Get NESZ at full resolution and full size matrix """
+        line, pixel, noise = self.get_noise_range_vectors(polarization)
+        if shift_lut:
+            noise = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
+
+        scales = None
+        offsets = None
+        if noise_scaling:
+            ns, pb = self.import_denoisingCoefficients(polarization)[:2]
+            scales = ns
+            if add_pb:
+                offsets = pb
+
+        nesz_fs = self.interp_nrv_full_size(noise, line, pixel, polarization, scales=scales, offsets=offsets)
+        nesz_fs *= self.get_scalloping_full_size(polarization)
+        nesz_fs /= self.get_calibration_full_size(polarization, power=2)
+
+        return nesz_fs
+
+    def get_raw_sigma0_full_size(self, polarization):
+        src_filename = self.bands()[self.get_band_number(f'DN_{polarization}')]['SourceFilename']
+        ds = gdal.Open(src_filename)
+        dn = ds.ReadAsArray()
+
+        line, pixel, noise = self.get_noise_range_vectors(polarization)
+        cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
+
+        sigma0_fs = dn.astype(float)**2 / self.get_calibration_full_size(polarization, power=2)
+
+        return sigma0_fs
