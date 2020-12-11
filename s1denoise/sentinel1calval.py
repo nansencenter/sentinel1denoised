@@ -84,12 +84,12 @@ class Sentinel1CalVal(Sentinel1Image):
         for l, p in zip(line, pixel):
             cal_line = np.zeros(p.size) + np.nan
             pix_brd = p[np.where(np.diff(p) == 1)[0]]
-            for swid in range(5):
-                if swid == 0:
+            for swid in range(len(self.swath_ids)):
+                if swid == list(self.swath_ids)[0]-1:
                     frs = 0
                 else:
                     frs = pix_brd[swid-1]+1
-                if swid == 4:
+                if swid == list(self.swath_ids)[-1]-1:
                     lrs = p[-1]
                 else:
                     lrs = pix_brd[swid]
