@@ -43,12 +43,12 @@ def get_unique_regions(file_list):
 
 def make_tbl(d_tbl, alg):
     for platform in platforms:
-        print('\n%s\n' % platform)
+        print('\n%s %s' % (platform, alg))
         ll_name = 'rows_%s' % platform
         vars()[ll_name] = []
         vars()[ll_name].append(modes_ll)
 
-        for key_region in d_tbl[platform][modes_ll[2]].keys():
+        for key_region in d_tbl[platform][modes_ll[3]].keys():
             try:
                 iw_hv = '%.3f/%.3f' % (d_tbl[platform][modes_ll[1]][key_region]['Mean_%s' % alg],
                                        d_tbl[platform][modes_ll[1]][key_region]['STD_%s' % alg])
@@ -76,11 +76,11 @@ def make_tbl(d_tbl, alg):
             vars()[ll_name].append([key_region,
                                     iw_vh, iw_hv, ew_hv, ew_vh])
 
-            tbl = Texttable()
-            tbl.set_cols_align(["c"] * 5)
-            tbl.set_deco(Texttable.HEADER | Texttable.VLINES)
-            tbl.set_cols_align(['l', 'c', 'c', 'c', 'c'])
-            tbl.add_rows(vars()[ll_name])
+        tbl = Texttable()
+        tbl.set_cols_align(["c"] * 5)
+        tbl.set_deco(Texttable.HEADER | Texttable.VLINES)
+        tbl.set_cols_align(['l', 'c', 'c', 'c', 'c'])
+        tbl.add_rows(vars()[ll_name])
 
         # Print table in readable form
         print(tbl.draw())
