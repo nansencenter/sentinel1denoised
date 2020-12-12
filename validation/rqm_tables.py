@@ -47,7 +47,7 @@ def make_tbl(d_tbl, alg):
         ll_name = 'rows_%s' % platform
         vars()[ll_name] = []
         vars()[ll_name].append(modes_ll)
-        
+
         for key_region in d_tbl[platform][modes_ll[2]].keys():
             try:
                 iw_hv = '%.3f/%.3f' % (d_tbl[platform][modes_ll[1]][key_region]['Mean_%s' % alg],
