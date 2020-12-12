@@ -3,5 +3,5 @@ The scripts for quality assessment of thermal noise removal from S1-A/B Level-1 
 To perform the validation you need:
 
 1. Run the script ``` python run_qm.py rqm /path/to/L1/GRD/files /path/to/output/dir ``` to caclulate RQM for individual files
-2. Run the script ``` run rqm_plot.py input/npz/path output/path ``` to plot the averaged statistics for each region as an aggregated bar plot
-3. Run the script ``` rqm_tables.py ``` to generate latex-tables of the obtained statistics
+2. Run the script ``` python rqm_plot.py input/npz/path output/path ``` to plot the averaged statistics for each region as an aggregated bar plot
+3. Run the script ``` python rqm_tables.py input/npz/path output/path ``` to generate latex-tables of the obtained statistics
