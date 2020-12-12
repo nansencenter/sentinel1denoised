@@ -1,13 +1,15 @@
 #!/usr/bin/env python
-""" Range quality metric plotting and averaging for each sensing mode
-    for platform [S1A/S1B] from npz files
+""" This script generate latex tables with statistics on RQM for
+    each polarization and mode combination for the both platforms [S1A/S1B].
 
-    run example: run rqm_analyze.py platform [S1A/S1B] input/json/path output/path
+    run example:
+            run rqm_tables.py input/npz/path output/path
 
     output:
-            png figure with mean values, STD and mean signed difference
+            Text files with latex formatting of the results ('ALGORITHM_PLATFORM.txt')
 
 """
+
 import argparse
 import glob
 import json
