@@ -12,13 +12,7 @@
 
 import argparse
 import glob
-import json
 import os
-
-import latextable
-import matplotlib
-matplotlib.use('agg')
-import matplotlib.pyplot as plt
 import numpy as np
 from tabulate import tabulate
 from texttable import Texttable
@@ -52,10 +46,9 @@ def make_tbl(d_tbl, alg):
         print('\n%s\n' % platform)
         ll_name = 'rows_%s' % platform
         vars()[ll_name] = []
-        vars()[ll_name].append(modes_ll)  # [ikey for ikey in d_plot[platform].keys()])
-
+        vars()[ll_name].append(modes_ll)
+        
         for key_region in d_tbl[platform][modes_ll[2]].keys():
-
             try:
                 iw_hv = '%.3f/%.3f' % (d_tbl[platform][modes_ll[1]][key_region]['Mean_%s' % alg],
                                        d_tbl[platform][modes_ll[1]][key_region]['STD_%s' % alg])
