@@ -41,7 +41,7 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     platforms = ['S1A', 'S1B']
-    regions = ['ARCTIC', 'ANTARCTIC', 'DESSERT', 'DOLLDRUMS', 'OCEAN']
+    regions = ['ARCTIC', 'ANTARCTIC', 'DESERT', 'DOLLDRUMS', 'OCEAN']
 
     modes = [['IW', 'HV'],
              ['IW', 'VH'],
