@@ -1,6 +1,7 @@
 # Quality assessment of thermal noise removal in range and azimuth directions for multi-swath S1 images 
 
-This directory contain scripts for quality assessment of thermal noise removal from S1-A/B Level-1 GRD images. The quality assessment comprises the proposed quality metric calculation for range and azimuth directions. The range quality metric (RQM) is based on Fisher's criteria and allows to estimate how a noise removal algorithm reduce discontinuities in sub-swaths for multi-swath acquisition - the less value of RQM means more successful noise removal. The azimuth quality metric (AQM) is based on periodicity detection in the signal using the auto-correlation function.
+This directory contain scripts for quality assessment of thermal noise removal from S1-A/B Level-1 GRD images. The quality assessment comprises the proposed quality metric calculation for range and azimuth directions. The range quality metric (RQM) is based on Fisher's criteria and allows to estimate how a noise removal algorithm reduce discontinuities in sub-swaths for multi-swath acquisition - the less value of RQM means more successful noise removal.
+The azimuth quality metric (AQM) is based on periodicity detection in the signal using the auto-correlation function and a simple indication of the existence of a prominent scalloping effect.
 
 To perform the validation you need:
 
