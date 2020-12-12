@@ -26,13 +26,8 @@ from texttable import Texttable
 def parse_run_experiment_args():
     """ Parse input args for run_experiment_* scripts """
     parser = argparse.ArgumentParser(description='Generate latex tables from RQM data')
-    #parser.add_argument('platform', choices=['S1A','S1B'])
-    #parser.add_argument('mode', choices=['EW', 'IW'])
-    #parser.add_argument('pol', choices=['VH', 'HV'])
     parser.add_argument('in_path')
     parser.add_argument('out_path')
-    #parser.add_argument('y_min')
-    #parser.add_argument('y_max')
     parser.add_argument('-c', '--cores', default=2, type=int,
                         help='Number of cores for parallel computation')
     return parser.parse_args()
@@ -131,7 +126,6 @@ def make_tbl(d_tbl, alg):
             try:
                 iw_vh = '%.3f/%.3f' % (d_tbl[platform][modes_ll[2]][key_region]['Mean_%s' % alg],
                                        d_tbl[platform][modes_ll[2]][key_region]['STD_%s' % alg])
-
             except:
                 iw_vh = '-'
 
@@ -156,13 +150,11 @@ def make_tbl(d_tbl, alg):
             tbl.set_cols_align(['l', 'c', 'c', 'c', 'c'])
             tbl.add_rows(vars()[ll_name])
 
-            # Print table in readable form
+        # Print table in readable form
         print(tbl.draw())
 
         tbl_body = tabulate(vars()[ll_name], headers='firstrow', tablefmt='latex')
         tbl_body = tbl_body.replace('{tabular}{lllll}', """{longtable}{lcccc} \\caption{RQM %s: %s}""" % (platform, alg)).replace('{tabular}','{longtable}')
-
-
 
         with open('%s/%s_%s_tbl.txt' % (args.out_path, alg, platform), 'w') as f:
             f.write(tbl_body)
@@ -182,7 +174,6 @@ modes = [['IW','HV'],
          ['EW','HV'],
          ['EW','VH']]
 
-#regions = ['ANTARCTIC', 'ARCTIC', 'DESSERT', 'DOLLDRUMS', 'OCEAN']
 d_plot = {}
 
 for platform in platforms:
@@ -191,15 +182,10 @@ for platform in platforms:
         imode_name =  '%s_%s' % (imode[0], imode[1])
         d_plot[platform][imode_name] = {}
         npz_list = glob.glob('%s/*%s*%s*%s*.npz' % (args.in_path, platform, imode[0], pol_mode[imode[1]]))
-        #print(npz_list)
-
-        # Get unique regions
         unq_file_masks = sorted(get_unique_regions(npz_list))
 
         for fmask in unq_file_masks:
-            #print(fmask)
             npz_list = glob.glob('%s/*%s*%s*%s*%s*.npz' % (args.in_path, platform, imode[0], pol_mode[imode[1]], fmask))
-            #print('Num of files: %s\n' % len(npz_list))
 
             total_esa_data = []
             total_nersc_data = []
@@ -227,7 +213,6 @@ for platform in platforms:
             d_plot[platform][imode_name][fmask]['Num_images'] = len(npz_list)
             d_plot[platform][imode_name][fmask]['Image_IDs'] = [os.path.basename(il).split('.')[0] for il in npz_list]
 
-            # Print results
             m_esa, std_esa, data_esa = get_mean_std('ESA', res_d)
             d_plot[platform][imode_name][fmask]['Mean_ESA'] = m_esa
             d_plot[platform][imode_name][fmask]['STD_ESA'] = std_esa
@@ -247,5 +232,3 @@ modes_ll = ['Validation site','IW_HV', 'IW_VH', 'EW_HV', 'EW_VH']
 
 make_tbl(d_plot, 'ESA')
 make_tbl(d_plot, 'NERSC')
-
-
