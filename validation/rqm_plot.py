@@ -125,8 +125,10 @@ for platform in platforms:
         d_plot = {}
 
         for fmask in unq_file_masks:
+            print('\n###%s###\n' % fmask)
             npz_list = glob.glob('%s/*%s*%s*%s*%s*.npz' % (args.in_path, platform, mode[0], pol_mode[mode[1]], fmask))
-
+            print(npz_list)
+            print('###\n')
             total_esa_data = []
             total_nersc_data = []
             total_diff_data = []
@@ -140,7 +142,9 @@ for platform in platforms:
                 res_d['%s_ll' % key] = []
 
             for key in d_npz.keys():
-                for a in npz_list:
+                for npz in npz_list:
+                    f_npz = np.load(npz)
+                    d_npz = dict(zip((k for k in f_npz), (f_npz[k] for k in f_npz)))
                     var_name = '%s_ll' % key
                     res_d[var_name].append(d_npz[key])
                 arr = np.concatenate(res_d[var_name])

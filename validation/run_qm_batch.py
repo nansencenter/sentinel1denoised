@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+pm#!/usr/bin/env python
 """ This python script process individual S1 Level-1 GRD files
 to get thermal noise removal quality assessment
 (the range quality metric (RQM) and the azimuth quality metric(AQM))
@@ -41,12 +41,15 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     platforms = ['S1A', 'S1B']
-    regions = ['ARCTIC', 'ANTARCTIC', 'DESERT', 'DOLLDRUMS', 'OCEAN']
+    #regions = ['ARCTIC', 'ANTARCTIC', 'DESERT', 'DOLLDRUMS', 'OCEAN']
+    regions = ['ANTARCTIC']
 
     modes = [['IW', 'HV'],
              ['IW', 'VH'],
              ['EW', 'HV'],
              ['EW', 'VH']]
+
+    modes = [['EW', 'HV']]
 
     qm_name = exp_names[args.quality_metric]
 
