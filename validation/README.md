@@ -5,6 +5,6 @@ This directory contain scripts for quality assessment of thermal noise removal f
 
 To perform the validation you need:
 
-1. Run the script ``` python run_qm.py rqm/aqm /path/to/L1/GRD/files /path/to/output/dir ``` to caclulate RQM/AQM for individual files
+1. Run the script ``` python run_qm_batch.py rqm/aqm /path/to/L1/GRD/files /path/to/output/dir ``` to caclulate RQM/AQM for individual files
 2. Run the script ``` python rqm_plot.py input/npz/path output/path ``` to plot the averaged statistics for each region as an aggregated bar plot
 3. Run the script ``` python rqm_tables.py input/npz/path output/path ``` to generate latex-tables of the obtained statistics
