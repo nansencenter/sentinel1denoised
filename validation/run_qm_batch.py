@@ -41,15 +41,12 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     platforms = ['S1A', 'S1B']
-    #regions = ['ARCTIC', 'ANTARCTIC', 'DESERT', 'DOLLDRUMS', 'OCEAN']
-    regions = ['ANTARCTIC']
+    regions = ['ARCTIC', 'ANTARCTIC', 'DESERT', 'DOLLDRUMS', 'OCEAN']
 
     modes = [['IW', 'HV'],
              ['IW', 'VH'],
              ['EW', 'HV'],
              ['EW', 'VH']]
-
-    modes = [['EW', 'HV']]
 
     qm_name = exp_names[args.quality_metric]
 
