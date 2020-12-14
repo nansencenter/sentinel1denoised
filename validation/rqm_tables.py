@@ -48,7 +48,7 @@ def make_tbl(d_tbl, alg):
         vars()[ll_name] = []
         vars()[ll_name].append(modes_ll)
 
-        for key_region in d_tbl[platform][modes_ll[3]].keys():
+        for key_region in regions: #d_tbl[platform][modes_ll[2]].keys():
             try:
                 iw_hv = '%.3f/%.3f' % (d_tbl[platform][modes_ll[1]][key_region]['Mean_%s' % alg],
                                        d_tbl[platform][modes_ll[1]][key_region]['STD_%s' % alg])
@@ -106,6 +106,8 @@ modes = [['IW','HV'],
          ['EW','HV'],
          ['EW','VH']]
 
+regions = ['ANTARCTIC', 'ARCTIC', 'DESERT', 'DOLLDRUMS', 'OCEAN']
+
 d_plot = {}
 
 for platform in platforms:
@@ -135,7 +137,9 @@ for platform in platforms:
 
             # Collect data for each margin
             for key in d_npz.keys():
-                for a in npz_list:
+                for npz in npz_list:
+                    f_npz = np.load(npz)
+                    d_npz = dict(zip((k for k in f_npz), (f_npz[k] for k in f_npz)))
                     var_name = '%s_ll' % key
                     res_d[var_name].append(d_npz[key])
                 arr = np.concatenate(res_d[var_name])
