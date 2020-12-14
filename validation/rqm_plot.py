@@ -126,7 +126,7 @@ for platform in platforms:
 
         for fmask in unq_file_masks:
             print('\n###%s###\n' % fmask)
-            npz_list = glob.glob('%s/*%s*%s*%s*%s*.npz' % (args.in_path, platform, mode[0], pol_mode[mode[1]], fmask))
+            npz_list = glob.glob('%s/*%s*%s*%s*_%s*.npz' % (args.in_path, platform, mode[0], pol_mode[mode[1]], fmask))
             print(npz_list)
             print('###\n')
             total_esa_data = []

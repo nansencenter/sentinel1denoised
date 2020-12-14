@@ -91,6 +91,39 @@ def make_tbl(d_tbl, alg):
         with open('%s/%s_%s_tbl.txt' % (args.out_path, alg, platform), 'w') as f:
             f.write(tbl_body)
 
+def make_tbl_file_list(d_tbl):
+    ''' Fuction to generate latex-formatted file lists from validation folders '''
+    rows = []
+    for platform in platforms:
+        print('\n%s\n' % platform)
+        for key in d_tbl[platform].keys():
+            for key_region in regions:
+                rows.append(['', ''])
+                rows.append(['', ''])
+                rows.append(['', '%s %s %s' % (platform, key, key_region)])
+                rows.append(['Num.', 'Scene ID'])
+                try:
+                    f_list = d_tbl[platform][key][key_region]['Image_IDs']
+                    for i, ifile in enumerate(f_list):
+                        rows.append([i+1, ifile.split('_%s' % key_region)[0]])
+                except:
+                    pass
+
+    tbl = Texttable()
+    tbl.set_cols_align(["c"] * 2)
+    #tbl.set_deco(Texttable.HEADER | Texttable.VLINES)
+    tbl.set_cols_align(['r', 'l'])
+    tbl.add_rows(rows)
+
+    # Print table in readable form
+    print(tbl.draw())
+
+    tbl_body = tabulate(rows, tablefmt='latex')
+    tbl_body = tbl_body.replace('{tabular}{ll}', """{longtable}{rl} \\caption{File list}""").replace('{tabular}','{longtable}')
+
+    with open('%s/file_lists.txt' % args.out_path, 'w') as f:
+        f.write(tbl_body)
+
 pol_mode = {
     'VH': '1SDV',
     'HV': '1SDH',
@@ -119,7 +152,7 @@ for platform in platforms:
         unq_file_masks = sorted(get_unique_regions(npz_list))
 
         for fmask in unq_file_masks:
-            npz_list = glob.glob('%s/*%s*%s*%s*%s*.npz' % (args.in_path, platform, imode[0], pol_mode[imode[1]], fmask))
+            npz_list = glob.glob('%s/*%s*%s*%s*_%s*.npz' % (args.in_path, platform, imode[0], pol_mode[imode[1]], fmask))
 
             total_esa_data = []
             total_nersc_data = []
@@ -168,3 +201,4 @@ modes_ll = ['Validation site','IW_HV', 'IW_VH', 'EW_HV', 'EW_VH']
 
 make_tbl(d_plot, 'ESA')
 make_tbl(d_plot, 'NERSC')
+make_tbl_file_list(d_plot)
