@@ -17,7 +17,7 @@ from s1denoise.utils import AnalyzeExperiment
 
 
 class AnalyzePowerBalancing(AnalyzeExperiment):
-    file_suffix = 'powerBalancing'
+    file_suffix = 'powerBalancing_new'
 
     def process(self):
         # stack data from pre-processed files

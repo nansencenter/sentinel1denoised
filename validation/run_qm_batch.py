@@ -1,4 +1,4 @@
-pm#!/usr/bin/env python
+#!/usr/bin/env python
 """ This python script process individual S1 Level-1 GRD files
 to get thermal noise removal quality assessment
 (the range quality metric (RQM) and the azimuth quality metric(AQM))

@@ -16,6 +16,7 @@ from multiprocessing import Pool
 
 
 from s1denoise import Sentinel1Image
+from sentinel1calval import Sentinel1CalVal
 
 out_dir = None
 pol = None
@@ -58,12 +59,12 @@ def parse_run_experiment_args():
 
 def run_process(zipFile):
     """ Process individual file with experiment_ """
-    out_basename = os.path.basename(zipFile).split('.')[0] + f'_{exp_name}.npz'
+    out_basename = os.path.basename(zipFile).split('.')[0] + f'_{exp_name}_new.npz'
     out_fullname = os.path.join(out_dir, out_basename)
     if os.path.exists(out_fullname):
         print(f'{out_fullname} already exists.')
     else:
-        s1 = Sentinel1Image(zipFile)
+        s1 = Sentinel1CalVal(zipFile)
         func = getattr(s1, 'experiment_' + exp_name)
         func(pol)
         print(f'Done! Moving file to {out_fullname}')
