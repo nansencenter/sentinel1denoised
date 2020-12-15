@@ -49,18 +49,21 @@ def main():
     for ipf_key in inp_par:
         if ipf_key not in out_par:
             out_par[ipf_key] = {}
+            if args.dst_ipf is not None:
+                dst_ipf_key = ipf_key.replace(ipf_key.split('_')[-1], str(args.dst_ipf))
+                out_par[dst_ipf_key] = {}
         if ipf_key not in out_files:
             out_files[ipf_key] = {}
             if args.dst_ipf is not None:
-                out_files[args.dst_ipf] = {}
+                out_files[dst_ipf_key] = {}
         for swath in inp_par[ipf_key]['mean']:
             #print(ipf_key, swath, inp_par[ipf_key]['mean'][swath], out_par[ipf_key][swath])
             out_par[ipf_key][swath] = inp_par[ipf_key]['mean'][swath]
             out_files[ipf_key] = inp_par[ipf_key]['files']
             if args.dst_ipf is not None:
                 #print(args.dst_ipf, swath, inp_par[ipf_key]['mean'][swath], out_par[ipf_key][swath])
-                out_par[args.dst_ipf][swath] = inp_par[ipf_key]['mean'][swath]
-                out_files[args.dst_ipf] = inp_par[ipf_key]['files']
+                out_par[dst_ipf_key][swath] = inp_par[ipf_key]['mean'][swath]
+                out_files[dst_ipf_key] = inp_par[ipf_key]['files']
 
     with open(args.out_file, 'w') as f:
         json.dump(out_par, f)
