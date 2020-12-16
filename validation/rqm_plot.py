@@ -49,15 +49,15 @@ def plot_results(d_plot, out_path):
 
     try:
         esa_m = np.nanmean(np.array(esa_data)[:, 0])
-        esa_std = np.nanmean(np.array(esa_data)[:, 1])
+        esa_std = np.nanstd(np.array(esa_data)[:, 1])
         esa_data.append((esa_m, esa_std))
 
         nersc_m = np.nanmean(np.array(nersc_data)[:, 0])
-        nersc_std = np.nanmean(np.array(nersc_data)[:, 1])
+        nersc_std = np.nanstd(np.array(nersc_data)[:, 1])
         nersc_data.append((nersc_m, nersc_std))
 
         diff_m = np.nanmean(np.array(diff_data)[:, 0])
-        diff_std = np.nanmean(np.array(diff_data)[:, 1])
+        diff_std = np.nanstd(np.array(diff_data)[:, 1])
         diff_data.append((diff_m, diff_std))
 
         print(np.array(esa_data)[:,0])
