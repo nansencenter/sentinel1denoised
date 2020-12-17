@@ -322,8 +322,12 @@ class Sentinel1CalVal(Sentinel1Image):
                     valid2b = np.where((pixel[v1] >= lrs+1) * (pixel[v1] <= lrs+num_px+1))[0]
                     s0a = s0[v1][valid2a]
                     s0b = s0[v1][valid2b]
-                    q = np.abs(np.nanmean(s0a) - np.nanmean(s0b)) / (np.nanstd(s0a) + np.nanstd(s0b))
-                    q_subswath.append(q)
+                    s0am = np.nanmean(s0a)
+                    s0bm = np.nanmean(s0b)
+                    s0as = np.nanstd(s0a)
+                    s0bs = np.nanstd(s0a)
+                    q = np.abs(s0am - s0bm) / (s0as + s0bs)
+                    q_subswath.append([q, s0am, s0bm, s0as, s0bs, line[v1]])
             q_all[swath_name] = np.array(q_subswath)
         return q_all
 
@@ -342,12 +346,15 @@ class Sentinel1CalVal(Sentinel1Image):
         s0_nersc = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_corrected)]
         q = [self.compute_rqm(s0, polarization, line, pixel, **kwargs) for s0 in [s0_esa, s0_shift, s0_nersc]]
 
+        alg_names = ['ESA', 'SHIFT', 'NERSC']
+        var_names = ['RQM', 'AVG1', 'AVG2', 'STD1', 'STD2']
         q_all = {}
         for swid in self.swath_ids[:-1]:
             swath_name = f'{self.obsMode}{swid}'
-            q_all[f'RQM_{swath_name}_ESA'] = q[0][swath_name]
-            q_all[f'RQM_{swath_name}_SHIFT'] = q[1][swath_name]
-            q_all[f'RQM_{swath_name}_NERSC'] = q[2][swath_name]
+            for alg_i, alg_name in enumerate(alg_names):
+                for var_i, var_name in enumerate(var_names):
+                    q_all[f'{var_name}_{swath_name}_{alg_name}'] = list(q[alg_i][swath_name][:, var_i])
+            q_all[f'LINE_{swath_name}'] = list(q[alg_i][swath_name][:, 5])
         return q_all
 
     def experiment_get_data(self, polarization, average_lines, zoom_step):
