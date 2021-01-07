@@ -182,6 +182,8 @@ class Sentinel1Image(Nansat):
                  'IW_GRDH_1SDH, IW_GRDH_1SDV, EW_GRDM_1SDH, or EW_GRDM_1SDV product.' )
         self.platform = self.filename.split('/')[-1][:3]    # S1A or S1B
         self.obsMode = self.filename.split('/')[-1][4:6]    # IW or EW
+        pol_mode = os.path.basename(self.filename).split('_')[3]
+        self.crosspol = {'1SDH': 'HV', '1SDV': 'VH'}[pol_mode]
         self.swath_ids = range(1, {'IW':3, 'EW':5}[self.obsMode]+1)
         txPol = self.filename.split('/')[-1][15]    # H or V
         self.annotationXML = {}
