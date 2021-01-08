@@ -1,3 +1,7 @@
+import glob
+import os
+import xml.etree.ElementTree as ET
+
 import numpy as np
 from osgeo import gdal
 from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
@@ -242,7 +246,7 @@ class Sentinel1CalVal(Sentinel1Image):
 
         return noise_shifted
 
-    def get_corrected_nesz_vectors(self, polarization, line, pixel, nesz, add_pb=True):
+    def get_corrected_noise_vectors(self, polarization, line, pixel, nesz, add_pb=True):
         """ Load scaling and offset coefficients from files and apply to input  NESZ """
         nesz_corrected = [np.zeros(p.size)+np.nan for p in pixel]
         swathBounds = self.import_swathBounds(polarization)
@@ -331,7 +335,7 @@ class Sentinel1CalVal(Sentinel1Image):
         nesz = self.calibrate_noise_vectors(noise, cal_s0, scall)
         noise_shifted = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
         nesz_shifted = self.calibrate_noise_vectors(noise_shifted, cal_s0, scall)
-        nesz_corrected = self.get_corrected_nesz_vectors(polarization, line, pixel, nesz_shifted)
+        nesz_corrected = self.get_corrected_noise_vectors(polarization, line, pixel, nesz_shifted)
         sigma0 = self.get_raw_sigma0_vectors(polarization, line, pixel, cal_s0)
         s0_esa   = [s0 - n0 for (s0,n0) in zip(sigma0, nesz)]
         s0_shift = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_shifted)]
@@ -416,7 +420,7 @@ class Sentinel1CalVal(Sentinel1Image):
         """ Compute power balancing coefficients for each range noise line and save as NPZ """
         line, pixel, sigma0, nesz, crop, swathBounds = self.experiment_get_data(
             polarization, average_lines, zoom_step)
-        nesz_corrected = self.get_corrected_nesz_vectors(
+        nesz_corrected = self.get_corrected_noise_vectors(
             polarization, line, pixel, nesz, add_pb=False)
 
         num_swaths = len(self.swath_ids)
@@ -610,3 +614,19 @@ class Sentinel1CalVal(Sentinel1Image):
         sigma0_fs = dn.astype(float)**2 / self.get_calibration_full_size(polarization, power=2)
 
         return sigma0_fs
+
+    def export_noise_xml(self, polarization, output_path):
+        crosspol_noise_file = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
+                          if 'noise-s1' in fn and '-%s-' % polarization.lower() in fn][0]
+
+        line, pixel, noise0 = self.get_noise_range_vectors(polarization)
+        noise1 = self.get_shifted_noise_vectors(polarization, line, pixel, noise0)
+        noise2 = self.get_corrected_noise_vectors(polarization, line, pixel, noise1)
+        tree = ET.parse(crosspol_noise_file)
+        root = tree.getroot()
+        for noiseRangeVector, pixel_vec, noise_vec in zip(root.iter('noiseRangeVector'), pixel, noise2):
+            noise_vec[np.isnan(noise_vec)] = 0
+            noiseRangeVector.find('pixel').text = ' '.join([f'{p}' for p in list(pixel_vec)])
+            noiseRangeVector.find('noiseRangeLut').text = ' '.join([f'{p}' for p in list(noise_vec)])
+        tree.write(os.path.join(output_path, os.path.basename(crosspol_noise_file)))
+        return crosspol_noise_file
