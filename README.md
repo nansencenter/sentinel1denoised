@@ -56,25 +56,16 @@ from s1denoise import Sentinel1Image
 s1 = Sentinel1Image('/path/to/data/S1B_EW_GRDM_1SDH_INPUTFILE.zip')
 
 # run thermal noise correction in HV polarisation with the default ESA algorithm
-s0hve = s1.thermalNoiseRemoval('HV', algorithm='ESA')
+s0hve = s1.remove_thermal_noise('HV', algorithm='ESA')
 
 # run thermal noise correction in HV polarisation with the NEW algorithm
-s0_hv = s1.thermalNoiseRemoval('HV')
+s0_hv = s1.remove_thermal_noise('HV')
 
 # run thermal and texture noise correction in HV polarisation
-s0_hv = s1.texturalNoiseRemoval('HV')
+s0_hv = s1.remove_texture_noise('HV')
 
 
 ```
-
-Process a single file and export as GeoTIFF:
-
-`s1_thermal_denoise.py /path/to/data/S1B_EW_GRDM_1SDH_INPUTFILE.zip /path/to/data/output.tif`
-
-Process a single file, convert to sigma0 to dB, replace negative values with the closest
-minimum positive value, process both HH and HV
-
-`s1_thermal_denoise.py INPUTFILE.zip OUTPUTFILE.tif -db -nn -p HHHV`
 
 Process a single file with thermal, textural and angular correction and export in dB
 
@@ -82,7 +73,7 @@ Process a single file with thermal, textural and angular correction and export i
 
 Process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
 
-`docker run --rm -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_thermal_denoise.py /input_dir/INPUTFILE.zip /output_dir/OUPUTFILE.tif`
+`docker run --rm -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_correction.py /input_dir/INPUTFILE.zip /output_dir/OUPUTFILE.tif`
 
 ## Experimental scripts
 
