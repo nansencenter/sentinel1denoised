@@ -1,27 +1,136 @@
+from datetime import datetime, timedelta
 import glob
+import json
 import os
 import xml.etree.ElementTree as ET
+from xml.dom.minidom import parse, parseString
+import zipfile
 
+from nansat import Nansat
 import numpy as np
 from osgeo import gdal
 from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
 from scipy.optimize import minimize
-from scipy.stats import pearsonr
 from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter
 
-from s1denoise.S1_TOPS_GRD_NoiseCorrection import Sentinel1Image, fit_noise_scaling_coeff
+from .utils import (cost, fit_noise_scaling_coeff, get_DOM_nodeValue)
 
 SPEED_OF_LIGHT = 299792458.
 
 
-def cost(x, pix_valid, interp, y_ref):
-    """ Cost function for finding noise LUT shift in Range """
-    y = interp(pix_valid+x)
-    return 1 - pearsonr(y_ref, y)[0]
-
-
-class Sentinel1CalVal(Sentinel1Image):
+class Sentinel1Image(Nansat):
     """ Cal/Val routines for Sentinel-1 performed on range noise vector coordinatess"""
+
+    def __init__(self, filename, mapperName='sentinel1_l1', logLevel=30):
+        ''' Read calibration/annotation XML files and auxiliary XML file '''
+        Nansat.__init__( self, filename, mapperName=mapperName, logLevel=logLevel)
+        if ( self.filename.split('/')[-1][4:16]
+             not in [ 'IW_GRDH_1SDH',
+                      'IW_GRDH_1SDV',
+                      'EW_GRDM_1SDH',
+                      'EW_GRDM_1SDV'  ] ):
+             raise ValueError( 'Source file must be Sentinel-1A/1B '
+                 'IW_GRDH_1SDH, IW_GRDH_1SDV, EW_GRDM_1SDH, or EW_GRDM_1SDV product.' )
+        self.platform = self.filename.split('/')[-1][:3]    # S1A or S1B
+        self.obsMode = self.filename.split('/')[-1][4:6]    # IW or EW
+        pol_mode = os.path.basename(self.filename).split('_')[3]
+        self.crosspol = {'1SDH': 'HV', '1SDV': 'VH'}[pol_mode]
+        self.pols = {'1SDH': ['HH', 'HV'], '1SDV': ['VH', 'VV']}[pol_mode]
+        self.swath_ids = range(1, {'IW':3, 'EW':5}[self.obsMode]+1)
+        txPol = self.filename.split('/')[-1][15]    # H or V
+        self.annotationXML = {}
+        self.calibrationXML = {}
+        self.noiseXML = {}
+
+        if zipfile.is_zipfile(self.filename):
+            with zipfile.PyZipFile(self.filename) as zf:
+                annotationFiles = [fn for fn in zf.namelist() if 'annotation/s1' in fn]
+                calibrationFiles = [fn for fn in zf.namelist()
+                                    if 'annotation/calibration/calibration-s1' in fn]
+                noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
+
+                for polarization in [txPol + 'H', txPol + 'V']:
+                    self.annotationXML[polarization] = parseString(
+                            [zf.read(fn) for fn in annotationFiles if polarization.lower() in fn][0])
+                    self.calibrationXML[polarization] = parseString(
+                        [zf.read(fn) for fn in calibrationFiles if polarization.lower() in fn][0])
+                    self.noiseXML[polarization] = parseString(
+                        [zf.read(fn) for fn in noiseFiles if polarization.lower() in fn][0])
+                self.manifestXML = parseString(zf.read([fn for fn in zf.namelist()
+                                                        if 'manifest.safe' in fn][0]))
+        else:
+            annotationFiles = [fn for fn in glob.glob(self.filename+'/annotation/*') if 's1' in fn]
+            calibrationFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
+                                if 'calibration-s1' in fn]
+            noiseFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
+                          if 'noise-s1' in fn]
+
+            for polarization in [txPol + 'H', txPol + 'V']:
+
+                for fn in annotationFiles:
+                    if polarization.lower() in fn:
+                        with open(fn) as ff:
+                            self.annotationXML[polarization] = parseString(ff.read())
+
+                for fn in calibrationFiles:
+                    if polarization.lower() in fn:
+                        with open(fn) as ff:
+                            self.calibrationXML[polarization] = parseString(ff.read())
+
+                for fn in noiseFiles:
+                    if polarization.lower() in fn:
+                        with open(fn) as ff:
+                            self.noiseXML[polarization] = parseString(ff.read())
+
+            with open(glob.glob(self.filename+'/manifest.safe')[0]) as ff:
+                self.manifestXML = parseString(ff.read())
+
+        # scene center time will be used as the reference for relative azimuth time in seconds
+        self.time_coverage_center = ( self.time_coverage_start + timedelta(
+            seconds=(self.time_coverage_end - self.time_coverage_start).total_seconds()/2) )
+        # get processor version of Sentinel-1 IPF (Instrument Processing Facility)
+        self.IPFversion = float(self.manifestXML.getElementsByTagName('safe:software')[0]
+                                .attributes['version'].value)
+        if self.IPFversion < 2.43:
+            print('\nERROR: IPF version of input image is lower than 2.43! '
+                  'Noise correction cannot be achieved using this module. '
+                  'Denoising vectors in annotation file are not qualified.\n')
+            return
+        elif 2.43 <= self.IPFversion < 2.53:
+            print('\nWARNING: IPF version of input image is lower than 2.53! '
+                  'Noise correction result might be wrong.\n')
+        # get the auxiliary calibration file
+        resourceList = self.manifestXML.getElementsByTagName('resource')
+        if resourceList==[]:
+            resourceList = self.manifestXML.getElementsByTagName('safe:resource')
+        for resource in resourceList:
+            if resource.attributes['role'].value=='AUX_CAL':
+                auxCalibFilename = resource.attributes['name'].value.split('/')[-1]
+        self.set_aux_data_dir()
+        self.download_aux_calibration(auxCalibFilename, self.platform.lower())
+        self.auxiliaryCalibrationXML = parse(self.auxiliaryCalibration_file)
+
+    def set_aux_data_dir(self):
+        """ Set directory where aux calibration data is stored """
+        self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.environ.get('HOME')),
+                                         '.s1denoise')
+        if not os.path.exists(self.aux_data_dir):
+            os.makedirs(self.aux_data_dir)
+
+    def download_aux_calibration(self, filename, platform):
+        """ Download auxiliary calibration files form ESA in self.aux_data_dir """
+        cal_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % platform)
+        cal_file_tgz = os.path.join(self.aux_data_dir, filename + '.TGZ')
+        if not os.path.exists(cal_file):
+            parts = filename.split('_')
+            cal_url = ('https://qc.sentinel1.eo.esa.int/product/%s/%s_%s/%s/%s.TGZ'
+                       % (parts[0], parts[1], parts[2], parts[3][1:], filename))
+            r = requests.get(cal_url, stream=True)
+            with open(cal_file_tgz, "wb") as f:
+                f.write(r.content)
+            subprocess.call(['tar', '-xzvf', cal_file_tgz, '-C', self.aux_data_dir])
+        self.auxiliaryCalibration_file = cal_file
 
     def get_noise_range_vectors(self, polarization):
         """ Get range noise from XML files and return noise, pixels and lines for non-zero elems"""
@@ -322,8 +431,12 @@ class Sentinel1CalVal(Sentinel1Image):
                     valid2b = np.where((pixel[v1] >= lrs+1) * (pixel[v1] <= lrs+num_px+1))[0]
                     s0a = s0[v1][valid2a]
                     s0b = s0[v1][valid2b]
-                    q = np.abs(np.nanmean(s0a) - np.nanmean(s0b)) / (np.nanstd(s0a) + np.nanstd(s0b))
-                    q_subswath.append(q)
+                    s0am = np.nanmean(s0a)
+                    s0bm = np.nanmean(s0b)
+                    s0as = np.nanstd(s0a)
+                    s0bs = np.nanstd(s0a)
+                    q = np.abs(s0am - s0bm) / (s0as + s0bs)
+                    q_subswath.append([q, s0am, s0bm, s0as, s0bs, line[v1]])
             q_all[swath_name] = np.array(q_subswath)
         return q_all
 
@@ -342,12 +455,15 @@ class Sentinel1CalVal(Sentinel1Image):
         s0_nersc = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_corrected)]
         q = [self.compute_rqm(s0, polarization, line, pixel, **kwargs) for s0 in [s0_esa, s0_shift, s0_nersc]]
 
+        alg_names = ['ESA', 'SHIFT', 'NERSC']
+        var_names = ['RQM', 'AVG1', 'AVG2', 'STD1', 'STD2']
         q_all = {}
         for swid in self.swath_ids[:-1]:
             swath_name = f'{self.obsMode}{swid}'
-            q_all[f'RQM_{swath_name}_ESA'] = q[0][swath_name]
-            q_all[f'RQM_{swath_name}_SHIFT'] = q[1][swath_name]
-            q_all[f'RQM_{swath_name}_NERSC'] = q[2][swath_name]
+            for alg_i, alg_name in enumerate(alg_names):
+                for var_i, var_name in enumerate(var_names):
+                    q_all[f'{var_name}_{swath_name}_{alg_name}'] = list(q[alg_i][swath_name][:, var_i])
+            q_all[f'LINE_{swath_name}'] = list(q[alg_i][swath_name][:, 5])
         return q_all
 
     def experiment_get_data(self, polarization, average_lines, zoom_step):
@@ -414,7 +530,7 @@ class Sentinel1CalVal(Sentinel1Image):
                     results[swath_name]['scalingFactor'].append(scalingFactor)
                     results[swath_name]['correlationCoefficient'].append(correlationCoefficient)
                     results[swath_name]['fitResidual'].append(fitResidual)
-        np.savez(self.name.split('.')[0] + '_noiseScaling_new.npz', **results)
+        np.savez(self.name.split('.')[0] + '_noiseScaling.npz', **results)
 
     def experiment_powerBalancing(self, polarization, average_lines=777, zoom_step=2):
         """ Compute power balancing coefficients for each range noise line and save as NPZ """
@@ -523,7 +639,7 @@ class Sentinel1CalVal(Sentinel1Image):
                 for key in tmp_results[swath_name]:
                     results[swath_name][key].append(tmp_results[swath_name][key])
 
-        np.savez(self.name.split('.')[0] + '_powerBalancing_new.npz', **results)
+        np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
 
     def get_scalloping_full_size(self, polarization):
         """ Interpolate noise azimuth vector to full resolution for all blocks """
@@ -552,6 +668,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return scall_fs
 
     def interp_nrv_full_size(self, z, line, pixel, polarization, power=1):
+        """ Interpolate noise range vectors to full size """
         z_fs = np.zeros(self.shape()) + np.nan
         swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
         for swath_name in swath_names:
@@ -567,6 +684,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return z_fs
 
     def get_calibration_full_size(self, polarization, power=1):
+        """ Get calibration constant on full size matrix """
         calibrationVector = self.import_calibrationVector(polarization)
         line = np.array(calibrationVector['line'])
         pixel = np.array(calibrationVector['pixel'])
@@ -586,11 +704,15 @@ class Sentinel1CalVal(Sentinel1Image):
         return nesz_fs
 
     def get_corrected_nesz_full_size(self, polarization, nesz):
+        """ Get corrected NESZ on full size matrix """
         nesz_corrected = np.array(nesz)
         swathBounds = self.import_swathBounds(polarization)
         ns, pb = self.import_denoisingCoefficients(polarization)[:2]
         for swid in self.swath_ids:
             swath_name = f'{self.obsMode}{swid}'
+            # skip correction id NS/PB coeffs are not available (e.g. HH or VV)
+            if swath_name not in ns:
+                continue
             swathBound = swathBounds[swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
@@ -604,6 +726,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return nesz_corrected
 
     def get_raw_sigma0_full_size(self, polarization):
+        """ Read DN from input GeoTiff file and calibrate """
         src_filename = self.bands()[self.get_band_number(f'DN_{polarization}')]['SourceFilename']
         ds = gdal.Open(src_filename)
         dn = ds.ReadAsArray()
@@ -616,6 +739,7 @@ class Sentinel1CalVal(Sentinel1Image):
         return sigma0_fs
 
     def export_noise_xml(self, polarization, output_path):
+        """ Export corrected (shifted and scaled) range noise into XML file """
         crosspol_noise_file = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
                           if 'noise-s1' in fn and '-%s-' % polarization.lower() in fn][0]
 
@@ -630,3 +754,300 @@ class Sentinel1CalVal(Sentinel1Image):
             noiseRangeVector.find('noiseRangeLut').text = ' '.join([f'{p}' for p in list(noise_vec)])
         tree.write(os.path.join(output_path, os.path.basename(crosspol_noise_file)))
         return crosspol_noise_file
+
+    def remove_thermal_noise(self, polarization, algorithm='NERSC'):
+        """ Get full size matrix with sigma0 - NESZ """
+        sigma0 = self.get_raw_sigma0_full_size(polarization)
+        if algorithm == 'NERSC':
+            nesz = self.get_nesz_full_size(polarization, shift_lut=True)
+            nesz = self.get_corrected_nesz_full_size(polarization, nesz)
+        else:
+            nesz = self.get_nesz_full_size(polarization)
+
+        return sigma0 - nesz
+
+    def import_noiseVector(self, polarization):
+        ''' Import noise vectors from noise annotation XML DOM '''
+        noiseRangeVector = { 'azimuthTime':[],
+                             'line':[],
+                             'pixel':[],
+                             'noiseRangeLut':[] }
+        noiseAzimuthVector = { '%s%s' % (self.obsMode, li):
+                                   { 'firstAzimuthLine':[],
+                                     'firstRangeSample':[],
+                                     'lastAzimuthLine':[],
+                                     'lastRangeSample':[],
+                                     'line':[],
+                                     'noiseAzimuthLut':[] }
+                               for li in self.swath_ids }
+        # ESA changed the noise vector structure from IPFv 2.9 to include azimuth variation
+        if self.IPFversion < 2.9:
+            noiseVectorList = self.noiseXML[polarization].getElementsByTagName('noiseVector')
+            for iList in noiseVectorList:
+                noiseRangeVector['azimuthTime'].append(
+                    datetime.strptime(get_DOM_nodeValue(iList,['azimuthTime']),
+                                      '%Y-%m-%dT%H:%M:%S.%f'))
+                noiseRangeVector['line'].append(
+                    get_DOM_nodeValue(iList,['line'],'int'))
+                noiseRangeVector['pixel'].append(
+                    get_DOM_nodeValue(iList,['pixel'],'int'))
+                # To keep consistency, noiseLut is stored as noiseRangeLut
+                noiseRangeVector['noiseRangeLut'].append(
+                    get_DOM_nodeValue(iList,['noiseLut'],'float'))
+            for iSW in self.swath_ids:
+                swath = self.obsMode + str(iSW)
+                noiseAzimuthVector[swath]['firstAzimuthLine'].append(0)
+                noiseAzimuthVector[swath]['firstRangeSample'].append(0)
+                noiseAzimuthVector[swath]['lastAzimuthLine'].append(self.shape()[0]-1)
+                noiseAzimuthVector[swath]['lastRangeSample'].append(self.shape()[1]-1)
+                noiseAzimuthVector[swath]['line'].append([0, self.shape()[0]-1])
+                # noiseAzimuthLut is filled with a vector of ones
+                noiseAzimuthVector[swath]['noiseAzimuthLut'].append([1.0, 1.0])
+        elif self.IPFversion >= 2.9:
+            noiseRangeVectorList = self.noiseXML[polarization].getElementsByTagName(
+                'noiseRangeVector')
+            for iList in noiseRangeVectorList:
+                noiseRangeVector['azimuthTime'].append(
+                    datetime.strptime(get_DOM_nodeValue(iList,['azimuthTime']),
+                                      '%Y-%m-%dT%H:%M:%S.%f'))
+                noiseRangeVector['line'].append(
+                    get_DOM_nodeValue(iList,['line'],'int'))
+                noiseRangeVector['pixel'].append(
+                    get_DOM_nodeValue(iList,['pixel'],'int'))
+                noiseRangeVector['noiseRangeLut'].append(
+                    get_DOM_nodeValue(iList,['noiseRangeLut'],'float'))
+            noiseAzimuthVectorList = self.noiseXML[polarization].getElementsByTagName(
+                'noiseAzimuthVector')
+            for iList in noiseAzimuthVectorList:
+                swath = get_DOM_nodeValue(iList,['swath'],'str')
+                for k in noiseAzimuthVector[swath].keys():
+                    if k=='noiseAzimuthLut':
+                        noiseAzimuthVector[swath][k].append(
+                            get_DOM_nodeValue(iList,[k],'float'))
+                    else:
+                        noiseAzimuthVector[swath][k].append(
+                            get_DOM_nodeValue(iList,[k],'int'))
+        return noiseRangeVector, noiseAzimuthVector
+
+    def import_calibrationVector(self, polarization):
+        ''' Import calibration vectors from calibration annotation XML DOM '''
+        calibrationVectorList = self.calibrationXML[polarization].getElementsByTagName(
+            'calibrationVector')
+        calibrationVector = { 'azimuthTime':[],
+                              'line':[],
+                              'pixel':[],
+                              'sigmaNought':[],
+                              'betaNought':[],
+                              'gamma':[],
+                              'dn':[] }
+        for iList in calibrationVectorList:
+            for k in calibrationVector.keys():
+                if k=='azimuthTime':
+                    calibrationVector[k].append(
+                        datetime.strptime(get_DOM_nodeValue(iList,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
+                elif k in ['line', 'pixel']:
+                    calibrationVector[k].append(
+                        get_DOM_nodeValue(iList,[k],'int'))
+                else:
+                    calibrationVector[k].append(
+                        get_DOM_nodeValue(iList,[k],'float'))
+        return calibrationVector
+
+    def import_swathBounds(self, polarization):
+        ''' Import swath bounds information from annotation XML DOM '''
+        swathMergeList = self.annotationXML[polarization].getElementsByTagName('swathMerge')
+        swathBounds = { '%s%s' % (self.obsMode, li):
+                            { 'azimuthTime':[],
+                              'firstAzimuthLine':[],
+                              'firstRangeSample':[],
+                              'lastAzimuthLine':[],
+                              'lastRangeSample':[] }
+                        for li in self.swath_ids }
+        for iList1 in swathMergeList:
+            swath = get_DOM_nodeValue(iList1,['swath'])
+            swathBoundsList = iList1.getElementsByTagName('swathBounds')
+            for iList2 in swathBoundsList:
+                for k in swathBounds[swath].keys():
+                    if k=='azimuthTime':
+                        swathBounds[swath][k].append(
+                            datetime.strptime(get_DOM_nodeValue(iList2,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
+                    else:
+                        swathBounds[swath][k].append(get_DOM_nodeValue(iList2,[k],'int'))
+        return swathBounds
+
+    def import_elevationAntennaPattern(self, polarization):
+        ''' Import elevation antenna pattern from auxiliary calibration XML DOM '''
+        calParamsList = self.auxiliaryCalibrationXML.getElementsByTagName('calibrationParams')
+        elevationAntennaPattern = { '%s%s' % (self.obsMode, li):
+                                        { 'elevationAngleIncrement':[],
+                                          'elevationAntennaPattern':[],
+                                          'absoluteCalibrationConstant':[],
+                                          'noiseCalibrationFactor':[] }
+                                    for li in self.swath_ids }
+        for iList in calParamsList:
+            swath = get_DOM_nodeValue(iList,['swath'])
+            pol = get_DOM_nodeValue(iList,['polarisation'])
+            if (swath in elevationAntennaPattern.keys()) and (pol==polarization):
+                elem = iList.getElementsByTagName('elevationAntennaPattern')[0]
+                for k in elevationAntennaPattern[swath].keys():
+                    if k=='elevationAngleIncrement':
+                        elevationAntennaPattern[swath][k] = (
+                            get_DOM_nodeValue(elem,[k],'float') )
+                    elif k=='elevationAntennaPattern':
+                        elevationAntennaPattern[swath][k] = (
+                            get_DOM_nodeValue(elem,['values'],'float') )
+                    else:
+                        elevationAntennaPattern[swath][k] = (
+                            get_DOM_nodeValue(iList,[k],'float') )
+        return elevationAntennaPattern
+
+    def import_geolocationGridPoint(self, polarization):
+        ''' Import geolocation grid point from annotation XML DOM '''
+        geolocationGridPointList = self.annotationXML[polarization].getElementsByTagName(
+            'geolocationGridPoint')
+        geolocationGridPoint = { 'azimuthTime':[],
+                                 'slantRangeTime':[],
+                                 'line':[],
+                                 'pixel':[],
+                                 'latitude':[],
+                                 'longitude':[],
+                                 'height':[],
+                                 'incidenceAngle':[],
+                                 'elevationAngle':[] }
+        for iList in geolocationGridPointList:
+            for k in geolocationGridPoint.keys():
+                if k=='azimuthTime':
+                    geolocationGridPoint[k].append(
+                        datetime.strptime(get_DOM_nodeValue(iList,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
+                elif k in ['line', 'pixel']:
+                    geolocationGridPoint[k].append(
+                        get_DOM_nodeValue(iList,[k],'int'))
+                else:
+                    geolocationGridPoint[k].append(
+                        get_DOM_nodeValue(iList,[k],'float'))
+        return geolocationGridPoint
+
+    def import_antennaPattern(self, polarization):
+        ''' Import antenna pattern from annotation XML DOM '''
+        antennaPatternList = self.annotationXML[polarization].getElementsByTagName('antennaPattern')
+        antennaPatternList = antennaPatternList[1:]
+        antennaPattern = { '%s%s' % (self.obsMode, li):
+                               { 'azimuthTime':[],
+                                 'slantRangeTime':[],
+                                 'elevationAngle':[],
+                                 'elevationPattern':[],
+                                 'incidenceAngle':[],
+                                 'terrainHeight':[],
+                                 'roll':[] }
+                           for li in self.swath_ids }
+        for iList in antennaPatternList:
+            swath = get_DOM_nodeValue(iList,['swath'])
+            for k in antennaPattern[swath].keys():
+                if k=='azimuthTime':
+                    antennaPattern[swath][k].append(
+                        datetime.strptime(get_DOM_nodeValue(iList,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
+                else:
+                    antennaPattern[swath][k].append(
+                        get_DOM_nodeValue(iList,[k],'float'))
+        return antennaPattern
+
+    def import_denoisingCoefficients(self, polarization, load_extra_scaling=False):
+        ''' Import denoising coefficients '''
+        filename_parts = os.path.basename(self.filename).split('_')
+        platform = filename_parts[0]
+        mode = filename_parts[1]
+        resolution = filename_parts[2]
+        denoise_filename = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            'denoising_parameters.json')
+        with open(denoise_filename) as f:
+            params = json.load(f)
+
+        noiseScalingParameters = {}
+        powerBalancingParameters = {}
+        extraScalingParameters = {}
+        noiseVarianceParameters = {}
+        IPFversion = float(self.IPFversion)
+        sensingDate = datetime.strptime(self.filename.split('/')[-1].split('_')[4], '%Y%m%dT%H%M%S')
+        if platform=='S1B' and IPFversion==2.72 and sensingDate >= datetime(2017,1,16,13,42,34):
+            # Adaption for special case.
+            # ESA abrubtly changed scaling LUT in AUX_PP1 from 20170116 while keeping the IPFv.
+            # After this change, the scaling parameters seems be much closer to those of IPFv 2.8.
+            IPFversion = 2.8
+
+        base_key = f'{platform}_{mode}_{resolution}_{polarization}'
+        for iSW in self.swath_ids:
+            subswathID = '%s%s' % (self.obsMode, iSW)
+
+            ns_key = f'{base_key}_NS_%0.1f' % IPFversion
+            if ns_key in params:
+                noiseScalingParameters[subswathID] = params[ns_key].get(subswathID, 1)
+            else:
+                print(f'WARNING: noise scaling for {subswathID} (IPF:{IPFversion}) is missing.')
+
+            pb_key = f'{base_key}_PB_%0.1f' % IPFversion
+            if pb_key in params:
+                powerBalancingParameters[subswathID] = params[pb_key].get(subswathID, 0)
+            else:
+                print(f'WARNING: power balancing for {subswathID} (IPF:{IPFversion}) is missing.')
+
+            if not load_extra_scaling:
+                continue
+            es_key = f'{base_key}_ES_%0.1f' % IPFversion
+            if es_key in params:
+                extraScalingParameters[subswathID] = params[es_key][subswathID]
+                extraScalingParameters['SNNR'] = params[es_key]['SNNR']
+            else:
+                print(f'WARNING: extra scaling for {subswathID} (IPF:{IPFversion}) is missing.')
+                extraScalingParameters['SNNR'] = np.linspace(-30,+30,601)
+                extraScalingParameters[subswathID] = np.ones(601)
+
+            nv_key = f'{base_key}_NV_%0.1f' % IPFversion
+            if pb_key in params:
+                nv_key[subswathID] = params[nv_key].get(subswathID, 0)
+            else:
+                print(f'WARNING: noise variance for {subswathID} (IPF:{IPFversion}) is missing.')
+
+        return ( noiseScalingParameters, powerBalancingParameters, extraScalingParameters,
+                 noiseVarianceParameters )
+
+    def remove_texture_noise(self, polarization, window=3, weight=0.5, s0_min=0.0008):
+        """ Thermal noise removal followed by textural noise compensation using Method2
+
+        Method2 is implemented as a weighted average of sigma0 and sigma0 smoothed with
+        a gaussian filter. Weight of sigma0 is proportional to SNR. Total noise power
+        is preserved by ofsetting the output signal by mean noise. Values below <s0_min>
+        are clipped to s0_min.
+
+        Parameters
+        ----------
+        polarisation : str
+            'HH' or 'HV'
+        window : int
+            Size of window in the gaussian filter
+        weight : float
+            Weight of smoothed signal
+        s0_min : float
+            Minimum value of sigma0 for clipping
+
+        Returns
+        -------
+        sigma0 : 2d numpy.ndarray
+            Full size array with thermal and texture noise removed
+
+        """
+        if self.IPFversion == 3.2:
+            self.IPFversion = 3.1
+        sigma0 = self.get_raw_sigma0_full_size(polarization)
+        nesz = self.get_nesz_full_size(polarization, shift_lut=True)
+        nesz = self.get_corrected_nesz_full_size(polarization, nesz)
+        sigma0 -= nesz
+
+        s0_offset = np.nanmean(nesz)
+        sigma0g = gaussian_filter(sigma0, window)
+        snr = sigma0g / nesz
+        sigma0o = (weight * sigma0g + snr * sigma0) / (weight + snr) + s0_offset
+        sigma0o[sigma0o < s0_min] = s0_min
+
+        return sigma0o
+

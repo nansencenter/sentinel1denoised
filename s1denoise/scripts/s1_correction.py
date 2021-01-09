@@ -3,7 +3,7 @@ import sys
 import argparse
 
 from s1denoise import Sentinel1Image
-from s1denoise.utils import run_correction
+from s1denoise.tools import run_correction
 
 def parse_args(args):
     ''' parse input arguments '''
