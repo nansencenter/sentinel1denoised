@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 import glob
 import json
 import os
+import requests
+import subprocess
 import xml.etree.ElementTree as ET
 from xml.dom.minidom import parse, parseString
 import zipfile
