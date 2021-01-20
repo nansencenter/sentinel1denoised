@@ -2,6 +2,7 @@ import numpy as np
 from scipy.stats import pearsonr
 from scipy.ndimage import minimum_filter
 from scipy.optimize import fminbound
+from scipy.ndimage.morphology import distance_transform_edt
 
 def cost(x, pix_valid, interp, y_ref):
     """ Cost function for finding noise LUT shift in Range """
@@ -52,3 +53,30 @@ def get_DOM_subElement(element, tags):
     for tag in tags:
         element = element.getElementsByTagName(tag)[0]
     return element
+
+def fill_gaps(array, mask, distance=15):
+    """ Fill gaps in input raster
+
+    Parameters
+    ----------
+    array : 2D numpy.array
+        Ratser with deformation field
+    mask : 2D numpy.array
+        Where are gaps
+    distance : int
+        Minimum size of gap to fill
+
+    Returns
+    -------
+    arra : 2D numpy.array
+        Ratser with gaps filled
+
+    """
+    dist, indi = distance_transform_edt(
+        mask,
+        return_distances=True,
+        return_indices=True)
+    gpi = dist <= distance
+    r,c = indi[:,gpi]
+    array[gpi] = array[r,c]
+    return array
