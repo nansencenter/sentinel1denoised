@@ -16,7 +16,7 @@ from scipy.optimize import minimize
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter
 
-from .utils import (cost, fit_noise_scaling_coeff, get_DOM_nodeValue)
+from .utils import (cost, fit_noise_scaling_coeff, get_DOM_nodeValue, fill_gaps)
 
 SPEED_OF_LIGHT = 299792458.
 
@@ -757,16 +757,21 @@ class Sentinel1Image(Nansat):
         tree.write(os.path.join(output_path, os.path.basename(crosspol_noise_file)))
         return crosspol_noise_file
 
-    def remove_thermal_noise(self, polarization, algorithm='NERSC'):
+    def remove_thermal_noise(self, polarization, algorithm='NERSC', remove_negative=True):
         """ Get full size matrix with sigma0 - NESZ """
         sigma0 = self.get_raw_sigma0_full_size(polarization)
+        sigma0[sigma0 == 0] = np.nan
         if algorithm == 'NERSC':
             nesz = self.get_nesz_full_size(polarization, shift_lut=True)
             nesz = self.get_corrected_nesz_full_size(polarization, nesz)
         else:
             nesz = self.get_nesz_full_size(polarization)
 
-        return sigma0 - nesz
+        sigma0 -= nesz
+
+        if remove_negative:
+            sigma0 = fill_gaps(sigma0, sigma0 <= 0)
+        return sigma0
 
     def import_noiseVector(self, polarization):
         ''' Import noise vectors from noise annotation XML DOM '''
