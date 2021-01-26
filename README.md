@@ -19,21 +19,15 @@ and [scipy](https://www.scipy.org/install.html) packages. A simple way to instal
 is to use [Anaconda](https://docs.conda.io/en/latest/miniconda.html).
 
 ```
-# clone repository
-git clone https://github.com/nansencenter/sentinel1denoised.git
-
 # create conda environment with key requirements
 conda create -y -n s1denoise gdal numpy pillow netcdf4 scipy requests
 
 # activate environment
 conda activate s1denoise
 
-# install nansat
-pip install https://github.com/nansencenter/nansat/archive/master.zip
+# install s1denoise
+pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.2.tar.gz
 
-# install s1denoise package
-cd sentinel1denoised
-python setup.py install
 ```
 
 Alternatively you can use [Docker](https://www.docker.com/):
