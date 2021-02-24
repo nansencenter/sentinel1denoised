@@ -16,7 +16,7 @@ from scipy.optimize import minimize
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter
 
-from .utils import (cost, fit_noise_scaling_coeff, get_DOM_nodeValue, fill_gaps)
+from s1denoise.utils import (cost, fit_noise_scaling_coeff, get_DOM_nodeValue, fill_gaps)
 
 SPEED_OF_LIGHT = 299792458.
 
@@ -104,8 +104,7 @@ class Sentinel1Image(Nansat):
                   'Noise correction result might be wrong.\n')
         # get the auxiliary calibration file
         resourceList = self.manifestXML.getElementsByTagName('resource')
-        if resourceList==[]:
-            resourceList = self.manifestXML.getElementsByTagName('safe:resource')
+        resourceList += self.manifestXML.getElementsByTagName('safe:resource')
         for resource in resourceList:
             if resource.attributes['role'].value=='AUX_CAL':
                 auxCalibFilename = resource.attributes['name'].value.split('/')[-1]
@@ -312,7 +311,7 @@ class Sentinel1Image(Nansat):
         rsp_interpolator = RectBivariateSpline(yggp, xggp, rangeSpreadingLoss)
         return rsp_interpolator
 
-    def get_shifted_noise_vectors(self, polarization, line, pixel, noise):
+    def get_shifted_noise_vectors(self, polarization, line, pixel, noise, skip = 4):
         """
         Estimate shift in range noise LUT relative to antenna gain pattern and correct for it.
 
@@ -336,11 +335,14 @@ class Sentinel1Image(Nansat):
                 valid1 = np.where((line >= fal) * (line <= lal))[0]
                 for v1 in valid1:
                     valid_lin = line[v1]
+                    # keep only pixels from that swath
                     valid2 = np.where(
                         (pixel[v1] >= frs) *
                         (pixel[v1] <= lrs) *
                         (np.isfinite(noise[v1])))[0]
-                    valid_pix = pixel[v1][valid2]
+                    # keep only unique pixels
+                    valid_pix, valid_pix_i = np.unique(pixel[v1][valid2], return_index=True)
+                    valid2 = valid2[valid_pix_i]
 
                     ba = ba_interpolator(valid_lin, valid_pix).flatten()
                     eap = eap_interpolator(ba).flatten()
@@ -349,7 +351,6 @@ class Sentinel1Image(Nansat):
 
                     noise_valid = np.array(noise[v1][valid2])
                     noise_interpolator = InterpolatedUnivariateSpline(valid_pix, noise_valid)
-                    skip = 4
                     pixel_shift = minimize(cost, 0, args=(valid_pix[skip:-skip], noise_interpolator, apg[skip:-skip])).x[0]
 
                     noise_shifted0 = noise_interpolator(valid_pix + pixel_shift)
