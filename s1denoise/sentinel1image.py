@@ -122,15 +122,29 @@ class Sentinel1Image(Nansat):
     def download_aux_calibration(self, filename, platform):
         """ Download auxiliary calibration files form ESA in self.aux_data_dir """
         cal_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % platform)
-        cal_file_tgz = os.path.join(self.aux_data_dir, filename + '.TGZ')
         if not os.path.exists(cal_file):
             parts = filename.split('_')
+            yyyy, mm, dd = parts[3][1:5], parts[3][5:7], parts[3][7:9]
             cal_url = ('https://qc.sentinel1.eo.esa.int/product/%s/%s_%s/%s/%s.TGZ'
                        % (parts[0], parts[1], parts[2], parts[3][1:], filename))
-            r = requests.get(cal_url, stream=True)
-            with open(cal_file_tgz, "wb") as f:
+            try:
+                print('Trying to download calibration from: ', cal_url)
+                r = requests.get(cal_url, stream=True)
+            except:
+                print(cal_url, 'is not accessible')
+                cal_url = f'http://aux.sentinel1.eo.esa.int/AUX_CAL/{yyyy}/{mm}/{dd}/{filename}/data/s1a-aux-cal.xml'
+                print('Trying: ', cal_url)
+                r = requests.get(cal_url, stream=True)
+                gzipped = False
+                download_file = cal_file
+            else:
+                gzipped = True
+                download_file = os.path.join(self.aux_data_dir, filename + '.TGZ')
+            with open(download_file, "wb") as f:
                 f.write(r.content)
-            subprocess.call(['tar', '-xzvf', cal_file_tgz, '-C', self.aux_data_dir])
+            print('Download calibration file - success!')
+            if gzipped:
+                subprocess.call(['tar', '-xzvf', cdownload_file, '-C', self.aux_data_dir])
         self.auxiliaryCalibration_file = cal_file
 
     def get_noise_range_vectors(self, polarization):
