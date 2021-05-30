@@ -123,10 +123,11 @@ class Sentinel1Image(Nansat):
         """ Download auxiliary calibration files form ESA in self.aux_data_dir """
         cal_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % platform)
         if not os.path.exists(cal_file):
-            parts = filename.split('_')
-            yyyy, mm, dd = parts[3][1:5], parts[3][5:7], parts[3][7:9]
-            cal_url = ('https://qc.sentinel1.groupcls.com/product/%s/%s_%s/%s/%s/%s/%s/%s.TGZ'
-                       % (parts[0], parts[1], parts[2], parts[3][1:], yyyy, mm, dd, filename))
+            mission, prodtype, auxtype, validitystart, generationdate = filename.split('_') #S1A_AUX_CAL_V20171017T080000_G20201215T124601.SAFE -> ['S1A', 'AUX', 'CAL', 'V20171017T080000', 'G20201215T124601.SAFE']
+            yyyy, mm, dd = validitystart[1:5], validitystart[5:7], validitystart[7:9]
+            
+            # URL based off https://qc.sentinel1.groupcls.com/product/S1A/AUX_CAL/2017/10/17/S1A_AUX_CAL_V20171017T080000_G20201215T124601.SAFE.TGZ
+            cal_url = f'https://qc.sentinel1.groupcls.com/product/{mission}/{prodtype}_{auxtype}/{yyyy}/{mm}/{dd}/{filename}.TGZ'
             try:
                 print('Trying to download calibration from: ', cal_url)
                 r = requests.get(cal_url, stream=True)
@@ -140,11 +141,17 @@ class Sentinel1Image(Nansat):
             else:
                 gzipped = True
                 download_file = os.path.join(self.aux_data_dir, filename + '.TGZ')
-            with open(download_file, "wb") as f:
-                f.write(r.content)
-            print('Download calibration file - success!')
-            if gzipped:
-                subprocess.call(['tar', '-xzvf', cdownload_file, '-C', self.aux_data_dir])
+
+            if r.status_code == 200:
+                with open(download_file, "wb") as f:
+                    f.write(r.content)
+                print('Download calibration file - success!')
+                if gzipped:
+                    subprocess.call(['tar', '-xzvf', download_file, '-C', self.aux_data_dir])
+            else:
+                print('Download calibration file - FAILED!')
+                raise Exception(f'Calibration file download failure - HTTP response code: {r.status_code}')
+
         self.auxiliaryCalibration_file = cal_file
 
     def get_noise_range_vectors(self, polarization):
