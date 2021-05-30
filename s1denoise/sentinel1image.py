@@ -125,8 +125,8 @@ class Sentinel1Image(Nansat):
         if not os.path.exists(cal_file):
             parts = filename.split('_')
             yyyy, mm, dd = parts[3][1:5], parts[3][5:7], parts[3][7:9]
-            cal_url = ('https://qc.sentinel1.eo.esa.int/product/%s/%s_%s/%s/%s.TGZ'
-                       % (parts[0], parts[1], parts[2], parts[3][1:], filename))
+            cal_url = ('https://qc.sentinel1.groupcls.com/product/%s/%s_%s/%s/%s/%s/%s/%s.TGZ'
+                       % (parts[0], parts[1], parts[2], parts[3][1:], yyyy, mm, dd, filename))
             try:
                 print('Trying to download calibration from: ', cal_url)
                 r = requests.get(cal_url, stream=True)
