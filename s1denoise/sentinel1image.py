@@ -554,7 +554,7 @@ class Sentinel1Image(Nansat):
                     results[swath_name]['scalingFactor'].append(scalingFactor)
                     results[swath_name]['correlationCoefficient'].append(correlationCoefficient)
                     results[swath_name]['fitResidual'].append(fitResidual)
-        np.savez(self.name.split('.')[0] + '_noiseScaling.npz', **results)
+        np.savez(self.filename.split('.')[0] + '_noiseScaling.npz', **results)
 
     def experiment_powerBalancing(self, polarization, average_lines=777, zoom_step=2):
         """ Compute power balancing coefficients for each range noise line and save as NPZ """
@@ -663,7 +663,7 @@ class Sentinel1Image(Nansat):
                 for key in tmp_results[swath_name]:
                     results[swath_name][key].append(tmp_results[swath_name][key])
 
-        np.savez(self.name.split('.')[0] + '_powerBalancing.npz', **results)
+        np.savez(self.filename.split('.')[0] + '_powerBalancing.npz', **results)
 
     def get_scalloping_full_size(self, polarization):
         """ Interpolate noise azimuth vector to full resolution for all blocks """
