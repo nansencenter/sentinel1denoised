@@ -47,13 +47,14 @@ def main():
     # launch proc in parallel
     with Pool(args.cores) as pool:
         pool.map(run_process, zip_files)
+    # run_process(zip_files[0])
 
 def parse_run_experiment_args():
     """ Parse input args for run_experiment_* scripts """
     parser = argparse.ArgumentParser(description='Aggregate statistics from individual NPZ files')
     parser.add_argument('experiment', choices=['ns', 'pb'])
     parser.add_argument('platform', choices=['S1A', 'S1B'])
-    parser.add_argument('polarization', choices=['HV', 'VH'])
+    parser.add_argument('polarization', choices=['HV', 'HH'])
     parser.add_argument('inp_dir', type=Path)
     parser.add_argument('out_dir', type=Path)
     parser.add_argument('-c', '--cores', default=2, type=int,
@@ -66,18 +67,18 @@ def run_process(zipFile):
     """ Process individual file with experiment_ """
     global out_dir, pol, exp_name, force
 
-    out_basename = Path(zipFile.stem + f'_{exp_name}.npz')
-    out_fullname = out_dir / out_basename
-    if out_fullname.exists() and not force:
-        print(f'{out_fullname} already exists.')
+    default_output = zipFile.parent / (zipFile.stem + f'_{exp_name}.npz')
+    desired_output = out_dir / default_output.name
+    if desired_output.exists() and not force:
+        print(f'{desired_output} already exists.')
     else:
         s1 = Sentinel1Image(zipFile.as_posix())
         func = getattr(s1, 'experiment_' + exp_name)
         func(pol)
-        print(f'Done! Moving file to {out_fullname}')
-        with open(out_fullname, 'wb') as handle:
-            handle.write(out_basename.read_bytes())
-        out_basename.unlink()
+        print(f'Done! Moving file to {desired_output}')
+        with open(desired_output, 'wb') as handle:
+            handle.write(default_output.read_bytes())
+        default_output.unlink()
 
 
 if __name__ == "__main__":
