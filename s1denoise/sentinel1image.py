@@ -434,6 +434,36 @@ class Sentinel1Image(Nansat):
             raw_sigma0[i] = np.nanmean(sigma0_fs[int(y0):int(y1)], axis=0)[pixel[i]]
         return raw_sigma0
 
+    def get_lons_vectors_from_full_size(self, line, pixel, lons_fs):
+        """ Read lons from input GeoTIff for given lines and for given pixels
+            from full size longitude matrix
+
+        """
+        lons_res = [np.zeros(p.size)+np.nan for p in pixel]
+        for i in range(line.shape[0]):
+            lons_res[i] = lons_fs[line[i]][pixel[i]]
+        return lons_res
+
+    def get_lats_vectors_from_full_size(self, line, pixel, lats_fs):
+        """ Read lats from input GeoTIff for given lines and for given pixels
+            from full size latitude matrix
+
+        """
+        lats_res = [np.zeros(p.size)+np.nan for p in pixel]
+        for i in range(line.shape[0]):
+            lats_res[i] = lats_fs[line[i]][pixel[i]]
+        return lats_res
+
+    def get_ia_vectors_from_full_size(self, line, pixel, ia_fs):
+        """ Read incidence angle values from input GeoTIff for given lines and for given pixels
+            from full size incidence angle matrix
+
+        """
+        ia_res = [np.zeros(p.size)+np.nan for p in pixel]
+        for i in range(line.shape[0]):
+            ia_res[i] = ia_fs[line[i]][pixel[i]]
+        return ia_res
+
     def compute_rqm(self, s0, polarization, line, pixel, num_px=100, **kwargs):
         """ Compute Range Quality Metric from the input sigma0 """
         swathBounds = self.import_swathBounds(polarization)
