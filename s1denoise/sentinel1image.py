@@ -455,8 +455,8 @@ class Sentinel1Image(Nansat):
         return lats_res
 
     def get_ia_vectors_from_full_size(self, line, pixel, ia_fs):
-        """ Read lats from input GeoTIff for given lines and for given pixels
-            from full size latitude matrix
+        """ Read incidence angle values from input GeoTIff for given lines and for given pixels
+            from full size incidence angle matrix
 
         """
         ia_res = [np.zeros(p.size)+np.nan for p in pixel]
