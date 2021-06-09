@@ -441,7 +441,7 @@ class Sentinel1Image(Nansat):
         """
         lons_res = [np.zeros(p.size)+np.nan for p in pixel]
         for i in range(line.shape[0]):
-            lons_res[i] = lons_fs[i][pixel[i]]
+            lons_res[i] = lons_fs[line[i]][pixel[i]]
         return lons_res
 
     def get_lats_vectors_from_full_size(self, line, pixel, lats_fs):
@@ -451,8 +451,18 @@ class Sentinel1Image(Nansat):
         """
         lats_res = [np.zeros(p.size)+np.nan for p in pixel]
         for i in range(line.shape[0]):
-            lats_res[i] = lats_fs[i][pixel[i]]
+            lats_res[i] = lats_fs[line[i]][pixel[i]]
         return lats_res
+
+    def get_ia_vectors_from_full_size(self, line, pixel, ia_fs):
+        """ Read lats from input GeoTIff for given lines and for given pixels
+            from full size latitude matrix
+
+        """
+        ia_res = [np.zeros(p.size)+np.nan for p in pixel]
+        for i in range(line.shape[0]):
+            ia_res[i] = ia_fs[line[i]][pixel[i]]
+        return ia_res
 
     def compute_rqm(self, s0, polarization, line, pixel, num_px=100, **kwargs):
         """ Compute Range Quality Metric from the input sigma0 """
