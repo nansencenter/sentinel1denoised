@@ -54,7 +54,7 @@ def parse_run_experiment_args():
     parser = argparse.ArgumentParser(description='Aggregate statistics from individual NPZ files')
     parser.add_argument('experiment', choices=['ns', 'pb'])
     parser.add_argument('platform', choices=['S1A', 'S1B'])
-    parser.add_argument('polarization', choices=['HV', 'HH'])
+    parser.add_argument('polarization', choices=['HV', 'VH'])
     parser.add_argument('inp_dir', type=Path)
     parser.add_argument('out_dir', type=Path)
     parser.add_argument('-c', '--cores', default=2, type=int,
