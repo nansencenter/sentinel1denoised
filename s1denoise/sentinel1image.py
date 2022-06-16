@@ -120,39 +120,26 @@ class Sentinel1Image(Nansat):
             os.makedirs(self.aux_data_dir)
 
     def download_aux_calibration(self, filename, platform):
-        """ Download auxiliary calibration files form ESA in self.aux_data_dir """
-        cal_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % platform)
-        if not os.path.exists(cal_file):
-            mission, prodtype, auxtype, validitystart, generationdate = filename.split('_') #S1A_AUX_CAL_V20171017T080000_G20201215T124601.SAFE -> ['S1A', 'AUX', 'CAL', 'V20171017T080000', 'G20201215T124601.SAFE']
-            yyyy, mm, dd = validitystart[1:5], validitystart[5:7], validitystart[7:9]
-            
-            # URL based off https://qc.sentinel1.groupcls.com/product/S1A/AUX_CAL/2017/10/17/S1A_AUX_CAL_V20171017T080000_G20201215T124601.SAFE.TGZ
-            cal_url = f'https://qc.sentinel1.groupcls.com/product/{mission}/{prodtype}_{auxtype}/{yyyy}/{mm}/{dd}/{filename}.TGZ'
-            try:
-                print('Trying to download calibration from: ', cal_url)
-                r = requests.get(cal_url, stream=True)
-            except:
-                print(cal_url, 'is not accessible')
-                cal_url = f'http://aux.sentinel1.eo.esa.int/AUX_CAL/{yyyy}/{mm}/{dd}/{filename}/data/s1a-aux-cal.xml'
-                print('Trying: ', cal_url)
-                r = requests.get(cal_url, stream=True)
-                gzipped = False
-                download_file = cal_file
-            else:
-                gzipped = True
-                download_file = os.path.join(self.aux_data_dir, filename + '.TGZ')
+        self.auxiliaryCalibration_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % platform)
+        if os.path.exists(self.auxiliaryCalibration_file):
+            return
+        vs = filename.split('_')[3].lstrip('V')
+        validity_start = f'{vs[:4]}-{vs[4:6]}-{vs[6:8]}T{vs[9:11]}:{vs[11:13]}:{vs[13:15]}'
 
-            if r.status_code == 200:
-                with open(download_file, "wb") as f:
-                    f.write(r.content)
-                print('Download calibration file - success!')
-                if gzipped:
-                    subprocess.call(['tar', '-xzvf', download_file, '-C', self.aux_data_dir])
-            else:
-                print('Download calibration file - FAILED!')
-                raise Exception(f'Calibration file download failure - HTTP response code: {r.status_code}')
+        cd = filename.split('_')[4].lstrip('G')
+        creation_date = f'{cd[:4]}-{cd[4:6]}-{cd[6:8]}T{cd[9:11]}:{cd[11:13]}:{cd[13:15]}'
+        api_url = f'https://sar-mpc.eu/api/v1/?product_type=AUX_CAL&validity_start={validity_start}&creation_date={creation_date}'
+        with requests.get(api_url, stream=True) as r:
+            uuid = json.loads(r.content.decode())['results'][0]['uuid']
 
-        self.auxiliaryCalibration_file = cal_file
+        download_file = os.path.join(self.aux_data_dir, filename + '.zip')
+        aux_cal_url = f'https://sar-mpc.eu/download/{uuid}/'
+        print(f'downloading {filename}.zip from {aux_cal_url}')
+        with requests.get(aux_cal_url, stream=True) as r:
+            with open(download_file, "wb") as f:
+                f.write(r.content)
+
+        subprocess.call(['unzip', download_file, '-d', self.aux_data_dir])
 
     def get_noise_range_vectors(self, polarization):
         """ Get range noise from XML files and return noise, pixels and lines for non-zero elems"""
