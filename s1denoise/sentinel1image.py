@@ -27,20 +27,20 @@ class Sentinel1Image(Nansat):
     def __init__(self, filename, mapperName='sentinel1_l1', logLevel=30):
         ''' Read calibration/annotation XML files and auxiliary XML file '''
         Nansat.__init__( self, filename, mapperName=mapperName, logLevel=logLevel)
-        if ( self.filename.split('/')[-1][4:16]
+        if ( self.filename.split(os.sep)[-1][4:16]
              not in [ 'IW_GRDH_1SDH',
                       'IW_GRDH_1SDV',
                       'EW_GRDM_1SDH',
                       'EW_GRDM_1SDV'  ] ):
              raise ValueError( 'Source file must be Sentinel-1A/1B '
                  'IW_GRDH_1SDH, IW_GRDH_1SDV, EW_GRDM_1SDH, or EW_GRDM_1SDV product.' )
-        self.platform = self.filename.split('/')[-1][:3]    # S1A or S1B
-        self.obsMode = self.filename.split('/')[-1][4:6]    # IW or EW
+        self.platform = self.filename.split(os.sep)[-1][:3]    # S1A or S1B
+        self.obsMode = self.filename.split(os.sep)[-1][4:6]    # IW or EW
         pol_mode = os.path.basename(self.filename).split('_')[3]
         self.crosspol = {'1SDH': 'HV', '1SDV': 'VH'}[pol_mode]
         self.pols = {'1SDH': ['HH', 'HV'], '1SDV': ['VH', 'VV']}[pol_mode]
         self.swath_ids = range(1, {'IW':3, 'EW':5}[self.obsMode]+1)
-        txPol = self.filename.split('/')[-1][15]    # H or V
+        txPol = self.filename.split(os.sep)[-1][15]    # H or V
         self.annotationXML = {}
         self.calibrationXML = {}
         self.noiseXML = {}
@@ -114,7 +114,7 @@ class Sentinel1Image(Nansat):
 
     def set_aux_data_dir(self):
         """ Set directory where aux calibration data is stored """
-        self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.environ.get('HOME')),
+        self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.path.expanduser('~')),
                                          '.s1denoise')
         if not os.path.exists(self.aux_data_dir):
             os.makedirs(self.aux_data_dir)
@@ -1027,7 +1027,7 @@ class Sentinel1Image(Nansat):
         extraScalingParameters = {}
         noiseVarianceParameters = {}
         IPFversion = float(self.IPFversion)
-        sensingDate = datetime.strptime(self.filename.split('/')[-1].split('_')[4], '%Y%m%dT%H%M%S')
+        sensingDate = datetime.strptime(self.filename.split(os.sep)[-1].split('_')[4], '%Y%m%dT%H%M%S')
         if platform=='S1B' and IPFversion==2.72 and sensingDate >= datetime(2017,1,16,13,42,34):
             # Adaption for special case.
             # ESA abrubtly changed scaling LUT in AUX_PP1 from 20170116 while keeping the IPFv.
