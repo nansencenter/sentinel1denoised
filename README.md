@@ -20,13 +20,19 @@ is to use [Anaconda](https://docs.conda.io/en/latest/miniconda.html).
 
 ```
 # create conda environment with key requirements
-conda create -y -n s1denoise gdal numpy pillow netcdf4 scipy requests
+conda create -y -n s1denoise gdal cartopy pip
 
 # activate environment
 conda activate s1denoise
 
+# install other reqs using pip
+pip install pythesint netcdf4 nansat
+
+# update metadata vocabularies
+python -c 'import pythesint as pti; pti.update_all_vocabularies()'
+
 # install s1denoise
-pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.2.tar.gz
+pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.3.1.tar.gz
 
 ```
 
