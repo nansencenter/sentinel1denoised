@@ -1,5 +1,17 @@
-If you use Sentinel1Denoised in any academic work then you *must* cite the following papers:
+If you use Sentinel1Denoised in any academic work please cite the following papers:
 
+A. Korosov, D. Demchev, N. Miranda, N. Franceschi and J. -W. Park, "Thermal Denoising of Cross-Polarized Sentinel-1 Data in Interferometric and Extra Wide Swath Modes," in IEEE Transactions on Geoscience and Remote Sensing, vol. 60, pp. 1-11, 2022, Art no. 5218411, doi: 10.1109/TGRS.2021.3131036.
+
+@ARTICLE{9627699,
+  author={Korosov, Anton and Demchev, Denis and Miranda, Nuno and Franceschi, Niccolò and Park, Jeong-Won},
+  journal={IEEE Transactions on Geoscience and Remote Sensing}, 
+  title={Thermal Denoising of Cross-Polarized Sentinel-1 Data in Interferometric and Extra Wide Swath Modes}, 
+  year={2022},
+  volume={60},
+  number={},
+  pages={1-11},
+  doi={10.1109/TGRS.2021.3131036}}
+  
 Park, Jeong-Won; Korosov, Anton; Babiker, Mohamed; Sandven, Stein; and Won, Joong-Sun (2018): Efficient noise removal of Sentinel-1 TOPSAR cross-polarization channel, IEEE Transactions on Geoscience and Remote Sensing, doi:10.1109/TGRS.2017.2765248
 
 https://doi.org/10.1109/TGRS.2017.2765248
