@@ -3,7 +3,9 @@ Thermal noise subtraction, scalloping correction, angular correction
 
 ## Citation
 
-If you use Sentinel1Denoised in any academic work then you *must* cite the following paper:
+If you use Sentinel1Denoised in any academic work please cite the following papers:
+
+A. Korosov, D. Demchev, N. Miranda, N. Franceschi and J. -W. Park, "Thermal Denoising of Cross-Polarized Sentinel-1 Data in Interferometric and Extra Wide Swath Modes," in IEEE Transactions on Geoscience and Remote Sensing, vol. 60, pp. 1-11, 2022, Art no. 5218411, doi: 10.1109/TGRS.2021.3131036.
 
 Park, Jeong-Won; Korosov, Anton; Babiker, Mohamed; Sandven, Stein; and Won, Joong-Sun (2018): Efficient noise removal of Sentinel-1 TOPSAR cross-polarization channel, IEEE Transactions on Geoscience and Remote Sensing, 56(3), 1555-1565, doi:10.1109/TGRS.2017.2765248
 
