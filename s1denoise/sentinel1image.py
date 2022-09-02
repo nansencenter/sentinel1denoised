@@ -139,7 +139,8 @@ class Sentinel1Image(Nansat):
             with open(download_file, "wb") as f:
                 f.write(r.content)
 
-        subprocess.call(['unzip', download_file, '-d', self.aux_data_dir])
+        with zipfile.ZipFile(download_file, 'r') as download_zip:
+            download_zip.extractall(path=self.aux_data_dir)
 
     def get_noise_range_vectors(self, polarization):
         """ Get range noise from XML files and return noise, pixels and lines for non-zero elems"""
