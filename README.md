@@ -20,7 +20,7 @@ The software is written in Python and requires
 and [scipy](https://www.scipy.org/install.html) packages. A simple way to install these packages
 is to use [Anaconda](https://docs.conda.io/en/latest/miniconda.html).
 
-```
+```shell
 # create conda environment with key requirements
 conda create -y -n s1denoise gdal cartopy pip
 
@@ -34,13 +34,13 @@ pip install pythesint netcdf4 nansat
 python -c 'import pythesint as pti; pti.update_all_vocabularies()'
 
 # install s1denoise
-pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.3.1.tar.gz
+pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.3.2.tar.gz
 
 ```
 
 Alternatively you can use [Docker](https://www.docker.com/):
 
-```
+```shell
 # build an image with eveything installed
 docker build . -t s1denoise
 
@@ -66,16 +66,32 @@ s0_hv = s1.remove_thermal_noise('HV')
 # run thermal and texture noise correction in HV polarisation
 s0_hv = s1.remove_texture_noise('HV')
 
-
 ```
 
-Process a single file with thermal, textural and angular correction and export in dB
+Process a single file with thermal, textural and angular correction and export in dB:
 
 `s1_correction.py INPUTFILE.zip OUTPUTFILE.tif`
 
 Process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
 
 `docker run --rm -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_correction.py /input_dir/INPUTFILE.zip /output_dir/OUPUTFILE.tif`
+
+With option `-m` the script will also save landmask in Numpy format in a separate file with name `OUTPUTFILE.tif_mask.npz`:
+
+`s1_correction.py -m INPUTFILE.zip OUTPUTFILE.tif`
+
+Note that for enabling the landmask functionality, you need to download and install the watermask:
+
+```shell
+# Set the environment variable MOD44WPATH to a writable directory. It is also used by the script.
+export MOD44WPATH=/home/user/MOD44W
+
+# Download the landmask and extract:
+wget -nc -nv -P $MOD44WPATH https://github.com/nansencenter/mod44w/raw/master/MOD44W.tgz
+tar -xzf $MOD44WPATH/MOD44W.tgz -C $MOD44WPATH/
+rm $MOD44WPATH/MOD44W.tgz
+
+```
 
 ## Experimental scripts
 
