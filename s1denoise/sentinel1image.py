@@ -777,6 +777,7 @@ class Sentinel1Image(Nansat):
         cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
 
         sigma0_fs = dn.astype(float)**2 / self.get_calibration_full_size(polarization, power=2)
+        sigma0_fs[dn == 0] = np.nan
 
         return sigma0_fs
 
