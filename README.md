@@ -34,7 +34,7 @@ pip install pythesint netcdf4 nansat
 python -c 'import pythesint as pti; pti.update_all_vocabularies()'
 
 # install s1denoise
-pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.3.2.tar.gz
+pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.3.3.tar.gz
 
 ```
 
