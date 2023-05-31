@@ -1058,7 +1058,7 @@ class Sentinel1Image(Nansat):
         return ( noiseScalingParameters, powerBalancingParameters, extraScalingParameters,
                  noiseVarianceParameters )
 
-    def remove_texture_noise(self, polarization, window=3, weight=0.5, s0_min=0, remove_negative=True, **kwargs):
+    def remove_texture_noise(self, polarization, window=3, weight=0.15, s0_min=0, remove_negative=True, **kwargs):
         """ Thermal noise removal followed by textural noise compensation using Method2
 
         Method2 is implemented as a weighted average of sigma0 and sigma0 smoothed with
@@ -1090,14 +1090,12 @@ class Sentinel1Image(Nansat):
         nesz = self.get_corrected_nesz_full_size(polarization, nesz)
         sigma0 -= nesz
 
-        if remove_negative:
-            sigma0 = fill_gaps(sigma0, sigma0 <= 0)
-
         s0_offset = np.nanmean(nesz)
         sigma0g = gaussian_filter(sigma0, window)
         snr = sigma0g / nesz
         sigma0o = (weight * sigma0g + snr * sigma0) / (weight + snr) + s0_offset
-        sigma0o[sigma0o < s0_min] = s0_min
+
+        if remove_negative:
+            sigma0o = fill_gaps(sigma0o, sigma0o <= s0_min)
 
         return sigma0o
-
