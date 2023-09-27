@@ -95,13 +95,12 @@ class Sentinel1Image(Nansat):
         self.IPFversion = float(self.manifestXML.getElementsByTagName('safe:software')[0]
                                 .attributes['version'].value)
         if self.IPFversion < 2.43:
-            print('\nERROR: IPF version of input image is lower than 2.43! '
-                  'Noise correction cannot be achieved using this module. '
-                  'Denoising vectors in annotation file are not qualified.\n')
-            return
+            print('\nERROR: IPF version of input image is lower than 2.43! \n'
+                  'Denoising vectors in annotation files are not qualified.\n'
+                  'Only G_TOT-based denoising can be performed\n')
         elif 2.43 <= self.IPFversion < 2.53:
-            print('\nWARNING: IPF version of input image is lower than 2.53! '
-                  'Noise correction result might be wrong.\n')
+            print('\nWARNING: IPF version of input image is lower than 2.53! \n'
+                  'ESA default noise correction result might be wrong.\n')
         # get the auxiliary calibration file
         resourceList = self.manifestXML.getElementsByTagName('resource')
         resourceList += self.manifestXML.getElementsByTagName('safe:resource')
@@ -154,9 +153,52 @@ class Sentinel1Image(Nansat):
             n[n == 0] = np.nan
             noise.append(n)
             pixel.append(np.array(pix))
+            
+        if self.IPFversion <= 2.43:
+            noise = [np.zeros_like(i) for i in noise]
 
         return line, pixel, noise
+    
+    def get_swath_id_vectors(self, polarization, line, pixel):
+        swath_indices = [np.zeros(p.shape, int) for p in pixel]
+        swathBounds = self.import_swathBounds(polarization)
 
+        for iswath, swath_name in enumerate(swathBounds):
+            swathBound = swathBounds[swath_name]
+            zipped = zip(
+                swathBound['firstAzimuthLine'],
+                swathBound['lastAzimuthLine'],
+                swathBound['firstRangeSample'],
+                swathBound['lastRangeSample'],
+            )
+            for fal, lal, frs, lrs in zipped:
+                valid1 = np.where((line >= fal) * (line <= lal))[0]
+                for v1 in valid1:
+                    valid2 = (pixel[v1] >= frs) * (pixel[v1] <= lrs)
+                    swath_indices[v1][valid2] = iswath + 1
+        return swath_indices
+
+    def get_apg_vectors(self, polarization, line, pixel, min_size=3):
+        """ Compute Antenna Pattern Gain APG=(1/EAP/RSL)**2 for each noise vectors """
+        apg_vectors = [np.zeros(p.size) + np.nan for p in pixel]
+        swath_indices = self.get_swath_id_vectors(polarization, line, pixel)
+        
+        for swid in self.swath_ids:
+            swath_name = f'{self.obsMode}{swid}'
+            eap_interpolator = self.get_eap_interpolator(swath_name, polarization)
+            ba_interpolator = self.get_boresight_angle_interpolator(polarization)
+            rsl_interpolator = self.get_range_spread_loss_interpolator(polarization)
+            for i, (l, p, swids) in enumerate(zip(line, pixel, swath_indices)):
+                gpi = np.where(swids == swid)[0]
+                if gpi.size > min_size:
+                    ba = ba_interpolator(l, p[gpi]).flatten()                    
+                    eap = eap_interpolator(ba).flatten()
+                    rsl = rsl_interpolator(l, p[gpi]).flatten()
+                    apg = (1/eap/rsl)**2
+                    apg_vectors[i][gpi] = apg
+            
+        return apg_vectors
+    
     def get_swath_interpolator(self, polarization, swath_name, line, pixel, z):
         """ Prepare interpolators for one swath """
         swathBounds = self.import_swathBounds(polarization)
@@ -188,38 +230,29 @@ class Sentinel1Image(Nansat):
         # interpolator for one subswath
         z_interp2 = RectBivariateSpline(swath_lines, pix_vec_fr, np.array(z_vecs))
         return z_interp2, swath_coords
-
-    def get_calibration_vectors(self, polarization, line, pixel):
-        """ Interpolate sigma0 calibration from XML file to the input line/pixel coordinates """
+    
+    def get_calibration_vectors(self, polarization, line, pixel, name='sigmaNought'):
         swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
         calibrationVector = self.import_calibrationVector(polarization)
         s0line = np.array(calibrationVector['line'])
         s0pixel = np.array(calibrationVector['pixel'])
-        sigma0 = np.array(calibrationVector['sigmaNought'])
+        sigma0 = np.array(calibrationVector[name])
 
-        swath_interpolators = []
+        sigma0_vecs = [np.zeros_like(p_vec) + np.nan for p_vec in pixel]
+
         for swath_name in swath_names:
-            z_interp2, swath_coords = self.get_swath_interpolator(
-                polarization, swath_name, s0line, s0pixel, sigma0)
-            swath_interpolators.append(z_interp2)
+            sigma0interp, swath_coords = self.get_swath_interpolator(polarization, swath_name, s0line, s0pixel, sigma0)
 
-        cal = []
-        for l, p in zip(line, pixel):
-            cal_line = np.zeros(p.size) + np.nan
-            pix_brd = p[np.where(np.diff(p) == 1)[0]]
-            for swid in range(len(self.swath_ids)):
-                if swid == list(self.swath_ids)[0]-1:
-                    frs = 0
-                else:
-                    frs = pix_brd[swid-1]+1
-                if swid == list(self.swath_ids)[-1]-1:
-                    lrs = p[-1]
-                else:
-                    lrs = pix_brd[swid]
-                pixel_gpi = (p >= frs) * (p <= lrs)
-                cal_line[pixel_gpi] = swath_interpolators[swid](l, p[pixel_gpi]).flatten()
-            cal.append(cal_line)
-        return cal
+            for fal, lal, frs, lrs in zip(*swath_coords):
+                valid1 = np.where((line >= fal) * (line <= lal))[0]
+                if valid1.size == 0:
+                    continue
+                for v1 in valid1:
+                    valid2 = np.where(
+                        (pixel[v1] >= frs) *
+                        (pixel[v1] <= lrs))[0]
+                    sigma0_vecs[v1][valid2] = sigma0interp(line[v1], pixel[v1][valid2])        
+        return sigma0_vecs
 
     def get_noise_azimuth_vectors(self, polarization, line, pixel):
         """ Interpolate scalloping noise from XML files to input pixel/lines coords """
@@ -263,12 +296,19 @@ class Sentinel1Image(Nansat):
         elevationAntennaPatternLUT = self.import_elevationAntennaPattern(polarization)
         eap_lut = np.array(elevationAntennaPatternLUT[subswathID]['elevationAntennaPattern'])
         eai_lut = elevationAntennaPatternLUT[subswathID]['elevationAngleIncrement']
-        recordLength = len(eap_lut)/2
-        angleLUT = np.arange(-(recordLength//2),+(recordLength//2)+1) * eai_lut
-        amplitudeLUT = np.sqrt(eap_lut[0::2]**2 + eap_lut[1::2]**2)
+        if self.IPFversion > 2.36:
+            # in case if both real and imaginary parts of EAP are given
+            recordLength = len(eap_lut)/2
+            amplitudeLUT = np.sqrt(eap_lut[0:-1:2]**2 + eap_lut[1::2]**2)
+        else:
+            recordLength = len(eap_lut)
+            # in case if elevationAntennaPattern is given in dB
+            amplitudeLUT = 10**(eap_lut/10)
+            
+        angleLUT = np.arange(-(recordLength//2),+(recordLength//2)+1) * eai_lut        
         eap_interpolator = InterpolatedUnivariateSpline(angleLUT, np.sqrt(amplitudeLUT))
         return eap_interpolator
-
+    
     def get_boresight_angle_interpolator(self, polarization):
         """
         Prepare interpolator for boresaight angles.
@@ -294,10 +334,8 @@ class Sentinel1Image(Nansat):
             rollAngle.append(antennaPattern[subswathID]['roll'])
         relativeAzimuthTime = np.hstack(relativeAzimuthTime)
         rollAngle = np.hstack(rollAngle)
-        rollAngleIntp = InterpolatedUnivariateSpline(
-            relativeAzimuthTime[sortIndex], rollAngle[sortIndex])
-        azimuthTime = [ (t-self.time_coverage_center).total_seconds()
-                          for t in geolocationGridPoint['azimuthTime'] ]
+        rollAngleIntp = InterpolatedUnivariateSpline(relativeAzimuthTime[sortIndex], rollAngle[sortIndex])
+        azimuthTime = [ (t-self.time_coverage_center).total_seconds() for t in geolocationGridPoint['azimuthTime'] ]
         azimuthTime = np.reshape(azimuthTime, (len(yggp), len(xggp)))
         roll_map = rollAngleIntp(azimuthTime)
 
@@ -975,7 +1013,7 @@ class Sentinel1Image(Nansat):
                         get_DOM_nodeValue(iList,[k],'float'))
         return geolocationGridPoint
 
-    def import_antennaPattern(self, polarization):
+    def import_antennaPattern(self, polarization, teta_ref=29.45):
         ''' Import antenna pattern from annotation XML DOM '''
         antennaPatternList = self.annotationXML[polarization].getElementsByTagName('antennaPattern')
         antennaPatternList = antennaPatternList[1:]
@@ -994,9 +1032,11 @@ class Sentinel1Image(Nansat):
                 if k=='azimuthTime':
                     antennaPattern[swath][k].append(
                         datetime.strptime(get_DOM_nodeValue(iList,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
+                elif k == 'roll' and self.IPFversion <= 2.36:
+                    # Sentinel-1-Level-1-Detailed-Algorithm-Definition.pdf, p. 9-12, eq. 9-19
+                    antennaPattern[swath][k].append(teta_ref)
                 else:
-                    antennaPattern[swath][k].append(
-                        get_DOM_nodeValue(iList,[k],'float'))
+                    antennaPattern[swath][k].append(get_DOM_nodeValue(iList,[k],'float'))
         return antennaPattern
 
     def import_denoisingCoefficients(self, polarization, load_extra_scaling=False):
