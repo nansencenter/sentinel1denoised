@@ -1,6 +1,7 @@
+from collections import defaultdict
+
 import numpy as np
 from scipy.stats import pearsonr
-from scipy.ndimage import minimum_filter
 from scipy.optimize import fminbound
 from scipy.ndimage.morphology import distance_transform_edt
 
@@ -80,3 +81,63 @@ def fill_gaps(array, mask, distance=15):
     r,c = indi[:,gpi]
     array[gpi] = array[r,c]
     return array
+
+def skip_swath_borders(swath_ids, skip=1):
+    swath_ids_skip = []
+    for swid in swath_ids:
+        swid_skip = np.array(swid)
+        for j in range(1,6):
+            gpi = np.where(swid == j)[0]
+            if gpi.size > 0:
+                swid_skip[gpi[:skip]] = 0
+                swid_skip[gpi[-skip:]] = 0
+        swath_ids_skip.append(swid_skip)
+    return swath_ids_skip
+
+def build_AY_matrix(swath_ids, sigma0hv, apg, incang, s0hv_max):
+    "HV = 1, IA, 1, APG1, 1, APG2, 1, APG3, 1, APG4, 1, APG5"
+
+    A_123 = []                  # [1]
+    A_apg = defaultdict(list)   # [APG scale and 1]
+    Y = []                      # [HV]
+
+    for iswath in range(1,6):
+        for swath_ids_v, sigma0hv_v, apg_v, incang_v in zip(swath_ids, sigma0hv, apg, incang):
+            gpi = np.where(swath_ids_v == iswath)[0]
+            # append only small enough values of HV
+            if np.nanmean(sigma0hv_v[gpi]) < s0hv_max[iswath]:
+                A_123.append([
+                    np.ones(gpi.size),
+                    incang_v[gpi],
+                ])
+                A_apg[iswath].append(np.vstack([
+                    np.ones(gpi.size),
+                    apg_v[gpi],
+                ]).T)
+                Y.append(sigma0hv_v[gpi])
+
+    if len(A_123) == 0:
+        return None, None
+    A_123 = np.hstack(A_123).T
+    Y = np.hstack(Y)[None].T
+
+    A = []
+    for iswath in A_apg:
+        A_apg_stack = np.vstack(A_apg[iswath])
+        A_apg_all = np.zeros((A_apg_stack.shape[0], 10))
+        A_apg_all[:, int((iswath-1)*2):int((iswath-1)*2+2)] = A_apg_stack
+        A.append(A_apg_all)
+
+    A = np.hstack([np.vstack(A), A_123])
+    gpi = np.isfinite(A.sum(axis=1)) * np.isfinite(Y.flat)
+
+    A = A[gpi]
+    Y = Y[gpi]
+
+    return A, Y
+
+def solve(A, Y):
+    B = np.linalg.lstsq(A, Y, rcond=None)
+    Y_rec = np.dot(A, B[0])
+    rmsd = np.sqrt(np.mean((Y - Y_rec)**2))
+    return B[0].flatten(), rmsd

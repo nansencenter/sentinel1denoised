@@ -3,6 +3,7 @@ import glob
 import json
 import os
 import requests
+import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from xml.dom.minidom import parse, parseString
@@ -16,7 +17,12 @@ from scipy.optimize import minimize
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter
 
-from s1denoise.utils import (cost, fit_noise_scaling_coeff, get_DOM_nodeValue, fill_gaps)
+from s1denoise.utils import (
+    cost,
+    fit_noise_scaling_coeff,
+    get_DOM_nodeValue,
+    fill_gaps,
+)
 
 SPEED_OF_LIGHT = 299792458.
 
@@ -24,9 +30,9 @@ SPEED_OF_LIGHT = 299792458.
 class Sentinel1Image(Nansat):
     """ Cal/Val routines for Sentinel-1 performed on range noise vector coordinatess"""
 
-    def __init__(self, filename, mapperName='sentinel1_l1', logLevel=30):
+    def __init__(self, filename, mapper='sentinel1_l1', log_level=30, fast=False):
         ''' Read calibration/annotation XML files and auxiliary XML file '''
-        Nansat.__init__( self, filename, mapperName=mapperName, logLevel=logLevel)
+        Nansat.__init__(self, filename, mapper=mapper, log_level=log_level, fast=fast)
         if ( self.filename.split(os.sep)[-1][4:16]
              not in [ 'IW_GRDH_1SDH',
                       'IW_GRDH_1SDV',
@@ -95,11 +101,11 @@ class Sentinel1Image(Nansat):
         self.IPFversion = float(self.manifestXML.getElementsByTagName('safe:software')[0]
                                 .attributes['version'].value)
         if self.IPFversion < 2.43:
-            print('\nERROR: IPF version of input image is lower than 2.43! \n'
-                  'Denoising vectors in annotation files are not qualified.\n'
-                  'Only G_TOT-based denoising can be performed\n')
+            print('\nERROR: IPF version of input image is lower than 2.43! '
+                  'Denoising vectors in annotation files are not qualified. '
+                  'Only APG-based denoising can be performed\n')
         elif 2.43 <= self.IPFversion < 2.53:
-            print('\nWARNING: IPF version of input image is lower than 2.53! \n'
+            print('\nWARNING: IPF version of input image is lower than 2.53! '
                   'ESA default noise correction result might be wrong.\n')
         # get the auxiliary calibration file
         resourceList = self.manifestXML.getElementsByTagName('resource')
@@ -127,19 +133,31 @@ class Sentinel1Image(Nansat):
 
         cd = filename.split('_')[4].lstrip('G')
         creation_date = f'{cd[:4]}-{cd[4:6]}-{cd[6:8]}T{cd[9:11]}:{cd[11:13]}:{cd[13:15]}'
-        api_url = f'https://sar-mpc.eu/api/v1/?product_type=AUX_CAL&validity_start={validity_start}&creation_date={creation_date}'
-        with requests.get(api_url, stream=True) as r:
-            uuid = json.loads(r.content.decode())['results'][0]['uuid']
+        def get_remote_url(api_url):
+            with requests.get(api_url, stream=True) as r:
+                rjson = json.loads(r.content.decode())
+                remote_url = rjson['results'][0]['remote_url']
+                physical_name = rjson['results'][0]['physical_name']
+                return remote_url, physical_name
 
-        download_file = os.path.join(self.aux_data_dir, filename + '.zip')
-        aux_cal_url = f'https://sar-mpc.eu/download/{uuid}/'
-        print(f'downloading {filename}.zip from {aux_cal_url}')
-        with requests.get(aux_cal_url, stream=True) as r:
+        try:
+            remote_url, physical_name = get_remote_url(f'https://sar-mpc.eu/api/v1/?product_type=AUX_CAL&validity_start={validity_start}&creation_date={creation_date}')
+        except:
+            remote_url, physical_name = get_remote_url(f'https://sar-mpc.eu/api/v1/?product_type=AUX_CAL&validity_start={validity_start}')
+
+        download_file = os.path.join(self.aux_data_dir, physical_name)
+        print(f'downloading {filename}.zip from {remote_url}')
+        with requests.get(remote_url, stream=True) as r:
             with open(download_file, "wb") as f:
                 f.write(r.content)
 
         with zipfile.ZipFile(download_file, 'r') as download_zip:
             download_zip.extractall(path=self.aux_data_dir)
+        output_dir = f'{self.aux_data_dir}/{filename}'
+        if not os.path.exists(output_dir):
+            # in case the physical_name of the downloaded file does not exactly match the filename from manifest
+            # the best found AUX-CAL file is copied to the filename from manifest
+            shutil.copytree(download_file.rstrip('.zip'), output_dir)
 
     def get_noise_range_vectors(self, polarization):
         """ Get range noise from XML files and return noise, pixels and lines for non-zero elems"""
@@ -198,6 +216,33 @@ class Sentinel1Image(Nansat):
                     apg_vectors[i][gpi] = apg
             
         return apg_vectors
+
+    def get_apg_scales_offsets(self):
+        params = self.load_denoising_parameters_json()
+        apg_id = f'{os.path.basename(self.filename)[:16]}_APG_{self.IPFversion:04.2f}'
+        p = params[apg_id]
+        offsets = []
+        scales = []
+        for i in range(5):
+            offsets.append(p['B'][i*2] / p['Y_SCALE'])
+            scales.append(p['B'][1+i*2] * p['A_SCALE'] / p['Y_SCALE'])
+        return scales, offsets
+
+    def get_apg_based_noise_vectors(self, polarization, line, pixel):
+        scales, offsets = self.get_apg_scales_offsets()
+        cal_s0hv = self.get_calibration_vectors(polarization, line, pixel)
+        scall_hv = self.get_noise_azimuth_vectors(polarization, line, pixel)
+        swath_ids = self.get_swath_id_vectors(polarization, line, pixel)
+        apg = self.get_apg_vectors(polarization, line, pixel)
+        apg = self.calibrate_noise_vectors(apg, cal_s0hv, scall_hv)
+
+        nesz_apg = [np.zeros_like(i) for i in apg]
+        for i in range(len(apg)):
+            for j in range(1,6):
+                gpi = swath_ids[i] == j
+                nesz_apg[i][gpi] = offsets[j-1] + apg[i][gpi] * scales[j-1]
+
+        return nesz_apg
     
     def get_swath_interpolator(self, polarization, swath_name, line, pixel, z):
         """ Prepare interpolators for one swath """
@@ -231,6 +276,21 @@ class Sentinel1Image(Nansat):
         z_interp2 = RectBivariateSpline(swath_lines, pix_vec_fr, np.array(z_vecs))
         return z_interp2, swath_coords
     
+    def get_elevation_incidence_angle_interpolators(self, polarization):
+        geolocationGridPoint = self.import_geolocationGridPoint(polarization)
+        xggp = np.unique(geolocationGridPoint['pixel'])
+        yggp = np.unique(geolocationGridPoint['line'])
+        elevation_map = np.array(geolocationGridPoint['elevationAngle']).reshape(len(yggp), len(xggp))
+        incidence_map = np.array(geolocationGridPoint['incidenceAngle']).reshape(len(yggp), len(xggp))
+        elevation_angle_interpolator = RectBivariateSpline(yggp, xggp, elevation_map)
+        incidence_angle_interpolator = RectBivariateSpline(yggp, xggp, incidence_map)
+        return elevation_angle_interpolator, incidence_angle_interpolator
+
+    def get_elevation_incidence_angle_vectors(self, ea_interpolator, ia_interpolator, line, pixel):
+        ea = [ea_interpolator(l, p).flatten() for (l, p) in zip(line, pixel)]
+        ia = [ia_interpolator(l, p).flatten() for (l, p) in zip(line, pixel)]
+        return ea, ia
+
     def get_calibration_vectors(self, polarization, line, pixel, name='sigmaNought'):
         swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
         calibrationVector = self.import_calibrationVector(polarization)
@@ -295,15 +355,13 @@ class Sentinel1Image(Nansat):
         """
         elevationAntennaPatternLUT = self.import_elevationAntennaPattern(polarization)
         eap_lut = np.array(elevationAntennaPatternLUT[subswathID]['elevationAntennaPattern'])
+        recordLength = elevationAntennaPatternLUT[subswathID]['elevationAntennaPatternCount']
         eai_lut = elevationAntennaPatternLUT[subswathID]['elevationAngleIncrement']
-        if self.IPFversion > 2.36:
-            # in case if both real and imaginary parts of EAP are given
-            recordLength = len(eap_lut)/2
-            amplitudeLUT = np.sqrt(eap_lut[0:-1:2]**2 + eap_lut[1::2]**2)
-        else:
-            recordLength = len(eap_lut)
+        if recordLength == eap_lut.shape[0]:
             # in case if elevationAntennaPattern is given in dB
             amplitudeLUT = 10**(eap_lut/10)
+        else:
+            amplitudeLUT = np.sqrt(eap_lut[0:-1:2]**2 + eap_lut[1::2]**2)
             
         angleLUT = np.arange(-(recordLength//2),+(recordLength//2)+1) * eai_lut        
         eap_interpolator = InterpolatedUnivariateSpline(angleLUT, np.sqrt(amplitudeLUT))
@@ -805,7 +863,29 @@ class Sentinel1Image(Nansat):
                 nesz_corrected[fal:lal+1, frs:lrs+1] += pb[swath_name]
         return nesz_corrected
 
-    def get_raw_sigma0_full_size(self, polarization):
+    def get_nesz_apg_full_size(self, polarization):
+        line, pixel, noise = self.get_noise_range_vectors(polarization)
+        nesz_apg = self.get_apg_based_noise_vectors(polarization, line, pixel)
+        scales, offsets = self.get_apg_scales_offsets()
+        apg = self.get_apg_vectors(polarization, line, pixel)
+        swath_ids = self.get_swath_id_vectors(polarization, line, pixel)
+
+        nesz_apg = [np.zeros_like(i) for i in apg]
+        for i in range(len(apg)):
+            for j in range(1,6):
+                gpi = swath_ids[i] == j
+                nesz_apg[i][gpi] = offsets[j-1] + apg[i][gpi] * scales[j-1]
+
+        scal_fs = self.get_scalloping_full_size(polarization)
+        cal_fs = self.get_calibration_full_size(polarization, power=2)
+        nesz_apg_fs = self.interp_nrv_full_size(nesz_apg, line, pixel, polarization, power=1)
+        nesz_apg_fs *= scal_fs
+        nesz_apg_fs /= cal_fs
+
+        return nesz_apg_fs
+
+
+    def get_raw_sigma0_full_size(self, polarization, min_dn=0):
         """ Read DN from input GeoTiff file and calibrate """
         src_filename = self.bands()[self.get_band_number(f'DN_{polarization}')]['SourceFilename']
         ds = gdal.Open(src_filename)
@@ -815,7 +895,7 @@ class Sentinel1Image(Nansat):
         cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
 
         sigma0_fs = dn.astype(float)**2 / self.get_calibration_full_size(polarization, power=2)
-        sigma0_fs[dn == 0] = np.nan
+        sigma0_fs[dn <= min_dn] = np.nan
 
         return sigma0_fs
 
@@ -836,16 +916,17 @@ class Sentinel1Image(Nansat):
         tree.write(os.path.join(output_path, os.path.basename(crosspol_noise_file)))
         return crosspol_noise_file
 
-    def remove_thermal_noise(self, polarization, algorithm='NERSC', remove_negative=True):
+    def remove_thermal_noise(self, polarization, algorithm='NERSC', remove_negative=True, min_dn=0):
         """ Get full size matrix with sigma0 - NESZ """
-        sigma0 = self.get_raw_sigma0_full_size(polarization)
-        sigma0[sigma0 == 0] = np.nan
         if algorithm == 'NERSC':
             nesz = self.get_nesz_full_size(polarization, shift_lut=True)
             nesz = self.get_corrected_nesz_full_size(polarization, nesz)
+        elif algorithm == 'NERSC_APG':
+            nesz = self.get_nesz_apg_full_size(polarization)
         else:
             nesz = self.get_nesz_full_size(polarization)
-
+        
+        sigma0 = self.get_raw_sigma0_full_size(polarization, min_dn=min_dn)
         sigma0 -= nesz
 
         if remove_negative:
@@ -968,7 +1049,9 @@ class Sentinel1Image(Nansat):
                                         { 'elevationAngleIncrement':[],
                                           'elevationAntennaPattern':[],
                                           'absoluteCalibrationConstant':[],
-                                          'noiseCalibrationFactor':[] }
+                                          'noiseCalibrationFactor':[],
+                                          'elevationAntennaPatternCount': None
+                                        }
                                     for li in self.swath_ids }
         for iList in calParamsList:
             swath = get_DOM_nodeValue(iList,['swath'])
@@ -977,14 +1060,12 @@ class Sentinel1Image(Nansat):
                 elem = iList.getElementsByTagName('elevationAntennaPattern')[0]
                 for k in elevationAntennaPattern[swath].keys():
                     if k=='elevationAngleIncrement':
-                        elevationAntennaPattern[swath][k] = (
-                            get_DOM_nodeValue(elem,[k],'float') )
+                        elevationAntennaPattern[swath][k] = get_DOM_nodeValue(elem,[k],'float')
                     elif k=='elevationAntennaPattern':
-                        elevationAntennaPattern[swath][k] = (
-                            get_DOM_nodeValue(elem,['values'],'float') )
-                    else:
-                        elevationAntennaPattern[swath][k] = (
-                            get_DOM_nodeValue(iList,[k],'float') )
+                        elevationAntennaPattern[swath][k] = get_DOM_nodeValue(elem,['values'],'float')
+                        elevationAntennaPattern[swath]['elevationAntennaPatternCount'] = int(elem.getElementsByTagName('values')[0].getAttribute('count'))
+                    elif k in ['absoluteCalibrationConstant', 'noiseCalibrationFactor']:
+                        elevationAntennaPattern[swath][k] = get_DOM_nodeValue(iList,[k],'float')
         return elevationAntennaPattern
 
     def import_geolocationGridPoint(self, polarization):
@@ -1039,17 +1120,21 @@ class Sentinel1Image(Nansat):
                     antennaPattern[swath][k].append(get_DOM_nodeValue(iList,[k],'float'))
         return antennaPattern
 
+    def load_denoising_parameters_json(self):
+        denoise_filename = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            'denoising_parameters.json')
+        with open(denoise_filename) as f:
+            params = json.load(f)
+        return params
+
     def import_denoisingCoefficients(self, polarization, load_extra_scaling=False):
         ''' Import denoising coefficients '''
         filename_parts = os.path.basename(self.filename).split('_')
         platform = filename_parts[0]
         mode = filename_parts[1]
         resolution = filename_parts[2]
-        denoise_filename = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)),
-            'denoising_parameters.json')
-        with open(denoise_filename) as f:
-            params = json.load(f)
+        params = self.load_denoising_parameters_json()
 
         noiseScalingParameters = {}
         powerBalancingParameters = {}
@@ -1109,7 +1194,7 @@ class Sentinel1Image(Nansat):
 
         Parameters
         ----------
-        polarisation : str
+        polarization : str
             'HH' or 'HV'
         window : int
             Size of window in the gaussian filter
