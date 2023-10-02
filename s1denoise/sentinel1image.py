@@ -212,7 +212,7 @@ class Sentinel1Image(Nansat):
                     ba = ba_interpolator(l, p[gpi]).flatten()                    
                     eap = eap_interpolator(ba).flatten()
                     rsl = rsl_interpolator(l, p[gpi]).flatten()
-                    apg = (1/eap/rsl)**2
+                    apg = (1 / eap / rsl) ** 2
                     apg_vectors[i][gpi] = apg
             
         return apg_vectors
@@ -228,22 +228,6 @@ class Sentinel1Image(Nansat):
             scales.append(p['B'][1+i*2] * p['A_SCALE'] / p['Y_SCALE'])
         return scales, offsets
 
-    def get_apg_based_noise_vectors(self, polarization, line, pixel):
-        scales, offsets = self.get_apg_scales_offsets()
-        cal_s0hv = self.get_calibration_vectors(polarization, line, pixel)
-        scall_hv = self.get_noise_azimuth_vectors(polarization, line, pixel)
-        swath_ids = self.get_swath_id_vectors(polarization, line, pixel)
-        apg = self.get_apg_vectors(polarization, line, pixel)
-        apg = self.calibrate_noise_vectors(apg, cal_s0hv, scall_hv)
-
-        nesz_apg = [np.zeros_like(i) for i in apg]
-        for i in range(len(apg)):
-            for j in range(1,6):
-                gpi = swath_ids[i] == j
-                nesz_apg[i][gpi] = offsets[j-1] + apg[i][gpi] * scales[j-1]
-
-        return nesz_apg
-    
     def get_swath_interpolator(self, polarization, swath_name, line, pixel, z):
         """ Prepare interpolators for one swath """
         swathBounds = self.import_swathBounds(polarization)
@@ -341,11 +325,7 @@ class Sentinel1Image(Nansat):
 
     def calibrate_noise_vectors(self, noise, cal_s0, scall):
         """ Compute calibrated NESZ from input noise, sigma0 calibration and scalloping noise"""
-        nesz = []
-        for n, cal, scall0 in zip(noise, cal_s0, scall):
-            n_calib = scall0 * n / cal**2
-            nesz.append(n_calib)
-        return nesz
+        return [s * n / c**2 for n, c, s in zip(noise, cal_s0, scall)]
 
     def get_eap_interpolator(self, subswathID, polarization):
         """
@@ -455,11 +435,13 @@ class Sentinel1Image(Nansat):
                     apg = (1/eap/rsp)**2
 
                     noise_valid = np.array(noise[v1][valid2])
-                    noise_interpolator = InterpolatedUnivariateSpline(valid_pix, noise_valid)
-                    pixel_shift = minimize(cost, 0, args=(valid_pix[skip:-skip], noise_interpolator, apg[skip:-skip])).x[0]
-
-                    noise_shifted0 = noise_interpolator(valid_pix + pixel_shift)
-                    noise_shifted[v1][valid2] = noise_shifted0
+                    if np.allclose(noise_valid, noise_valid[0]):
+                        noise_shifted[v1][valid2] = noise_valid
+                    else:
+                        noise_interpolator = InterpolatedUnivariateSpline(valid_pix, noise_valid)
+                        pixel_shift = minimize(cost, 0, args=(valid_pix[skip:-skip], noise_interpolator, apg[skip:-skip])).x[0]
+                        noise_shifted0 = noise_interpolator(valid_pix + pixel_shift)
+                        noise_shifted[v1][valid2] = noise_shifted0
 
         return noise_shifted
 
@@ -829,18 +811,6 @@ class Sentinel1Image(Nansat):
         s0 = np.array(calibrationVector['sigmaNought'])
         return self.interp_nrv_full_size(s0, line, pixel, polarization, power=power)
 
-    def get_nesz_full_size(self, polarization, shift_lut=False):
-        """ Get NESZ at full resolution and full size matrix """
-        line, pixel, noise = self.get_noise_range_vectors(polarization)
-        if shift_lut:
-            noise = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
-
-        nesz_fs = self.interp_nrv_full_size(noise, line, pixel, polarization)
-        nesz_fs *= self.get_scalloping_full_size(polarization)
-        nesz_fs /= self.get_calibration_full_size(polarization, power=2)
-
-        return nesz_fs
-
     def get_corrected_nesz_full_size(self, polarization, nesz):
         """ Get corrected NESZ on full size matrix """
         nesz_corrected = np.array(nesz)
@@ -863,40 +833,14 @@ class Sentinel1Image(Nansat):
                 nesz_corrected[fal:lal+1, frs:lrs+1] += pb[swath_name]
         return nesz_corrected
 
-    def get_nesz_apg_full_size(self, polarization):
-        line, pixel, noise = self.get_noise_range_vectors(polarization)
-        nesz_apg = self.get_apg_based_noise_vectors(polarization, line, pixel)
-        scales, offsets = self.get_apg_scales_offsets()
-        apg = self.get_apg_vectors(polarization, line, pixel)
-        swath_ids = self.get_swath_id_vectors(polarization, line, pixel)
-
-        nesz_apg = [np.zeros_like(i) for i in apg]
-        for i in range(len(apg)):
-            for j in range(1,6):
-                gpi = swath_ids[i] == j
-                nesz_apg[i][gpi] = offsets[j-1] + apg[i][gpi] * scales[j-1]
-
-        scal_fs = self.get_scalloping_full_size(polarization)
-        cal_fs = self.get_calibration_full_size(polarization, power=2)
-        nesz_apg_fs = self.interp_nrv_full_size(nesz_apg, line, pixel, polarization, power=1)
-        nesz_apg_fs *= scal_fs
-        nesz_apg_fs /= cal_fs
-
-        return nesz_apg_fs
-
-
     def get_raw_sigma0_full_size(self, polarization, min_dn=0):
         """ Read DN from input GeoTiff file and calibrate """
         src_filename = self.bands()[self.get_band_number(f'DN_{polarization}')]['SourceFilename']
         ds = gdal.Open(src_filename)
         dn = ds.ReadAsArray()
 
-        line, pixel, noise = self.get_noise_range_vectors(polarization)
-        cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
-
         sigma0_fs = dn.astype(float)**2 / self.get_calibration_full_size(polarization, power=2)
         sigma0_fs[dn <= min_dn] = np.nan
-
         return sigma0_fs
 
     def export_noise_xml(self, polarization, output_path):
@@ -916,18 +860,42 @@ class Sentinel1Image(Nansat):
         tree.write(os.path.join(output_path, os.path.basename(crosspol_noise_file)))
         return crosspol_noise_file
 
-    def remove_thermal_noise(self, polarization, algorithm='NERSC', remove_negative=True, min_dn=0):
-        """ Get full size matrix with sigma0 - NESZ """
+    def get_noise_apg_vectors(self, polarization, line, pixel):
+        noise = [np.zeros_like(i) for i in pixel]
+        scales, offsets = self.get_apg_scales_offsets()
+        apg = self.get_apg_vectors(polarization, line, pixel)
+        swath_ids = self.get_swath_id_vectors(polarization, line, pixel)
+        for i in range(len(apg)):
+            for j in range(1,6):
+                gpi = swath_ids[i] == j
+                noise[i][gpi] = offsets[j-1] + apg[i][gpi] * scales[j-1]
+        return noise
+
+    def get_nesz_full_size(self, polarization, algorithm):
+        # ESA noise vectors
+        line, pixel, noise = self.get_noise_range_vectors(polarization)
         if algorithm == 'NERSC':
-            nesz = self.get_nesz_full_size(polarization, shift_lut=True)
-            nesz = self.get_corrected_nesz_full_size(polarization, nesz)
+            # NERSC correction of noise shift in range direction
+            noise = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
         elif algorithm == 'NERSC_APG':
-            nesz = self.get_nesz_apg_full_size(polarization)
-        else:
-            nesz = self.get_nesz_full_size(polarization)
-        
+            # APG-based noise vectors
+            noise = self.get_noise_apg_vectors(polarization, line, pixel)
+        # noise calibration
+        cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
+        nesz = [n / c**2 for (n,c) in zip(noise, cal_s0)]
+        # noise full size
+        nesz_fs = self.interp_nrv_full_size(nesz, line, pixel, polarization)
+        # scalloping correction
+        nesz_fs *= self.get_scalloping_full_size(polarization)
+        # NERSC correction of NESZ magnitude
+        if algorithm == 'NERSC':
+            nesz_fs = self.get_corrected_nesz_full_size(polarization, nesz_fs)
+        return nesz_fs
+
+    def remove_thermal_noise(self, polarization, algorithm='NERSC', remove_negative=True, min_dn=0):
+        nesz_fs = self.get_nesz_full_size(polarization, algorithm)
         sigma0 = self.get_raw_sigma0_full_size(polarization, min_dn=min_dn)
-        sigma0 -= nesz
+        sigma0 -= nesz_fs
 
         if remove_negative:
             sigma0 = fill_gaps(sigma0, sigma0 <= 0)
@@ -1157,12 +1125,14 @@ class Sentinel1Image(Nansat):
                 noiseScalingParameters[subswathID] = params[ns_key].get(subswathID, 1)
             else:
                 print(f'WARNING: noise scaling for {subswathID} (IPF:{IPFversion}) is missing.')
+                noiseScalingParameters[subswathID] = 1
 
             pb_key = f'{base_key}_PB_%0.1f' % IPFversion
             if pb_key in params:
                 powerBalancingParameters[subswathID] = params[pb_key].get(subswathID, 0)
             else:
                 print(f'WARNING: power balancing for {subswathID} (IPF:{IPFversion}) is missing.')
+                powerBalancingParameters[subswathID] = 0
 
             if not load_extra_scaling:
                 continue
@@ -1184,7 +1154,7 @@ class Sentinel1Image(Nansat):
         return ( noiseScalingParameters, powerBalancingParameters, extraScalingParameters,
                  noiseVarianceParameters )
 
-    def remove_texture_noise(self, polarization, window=3, weight=0.15, s0_min=0, remove_negative=True, **kwargs):
+    def remove_texture_noise(self, polarization, window=3, weight=0.15, s0_min=0, remove_negative=True, algorithm='NERSC', min_dn=0, **kwargs):
         """ Thermal noise removal followed by textural noise compensation using Method2
 
         Method2 is implemented as a weighted average of sigma0 and sigma0 smoothed with
@@ -1209,11 +1179,11 @@ class Sentinel1Image(Nansat):
             Full size array with thermal and texture noise removed
 
         """
+
         if self.IPFversion == 3.2:
             self.IPFversion = 3.1
-        sigma0 = self.get_raw_sigma0_full_size(polarization)
-        nesz = self.get_nesz_full_size(polarization, shift_lut=True)
-        nesz = self.get_corrected_nesz_full_size(polarization, nesz)
+        sigma0 = self.get_raw_sigma0_full_size(polarization, min_dn=min_dn)
+        nesz = self.get_nesz_full_size(polarization, algorithm)
         sigma0 -= nesz
 
         s0_offset = np.nanmean(nesz)
