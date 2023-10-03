@@ -5,6 +5,10 @@ from scipy.stats import pearsonr
 from scipy.optimize import fminbound
 from scipy.ndimage.morphology import distance_transform_edt
 
+def cubic_hermite_interpolation(x,y,xi):
+    ''' Get interpolated value for given time '''
+    return np.polynomial.hermite.hermval(xi, np.polynomial.hermite.hermfit(x,y,deg=3))
+
 def cost(x, pix_valid, interp, y_ref):
     """ Cost function for finding noise LUT shift in Range """
     y = interp(pix_valid+x)

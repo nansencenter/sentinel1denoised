@@ -22,6 +22,7 @@ from s1denoise.utils import (
     fit_noise_scaling_coeff,
     get_DOM_nodeValue,
     fill_gaps,
+    cubic_hermite_interpolation,
 )
 
 SPEED_OF_LIGHT = 299792458.
@@ -1062,31 +1063,83 @@ class Sentinel1Image(Nansat):
                         get_DOM_nodeValue(iList,[k],'float'))
         return geolocationGridPoint
 
-    def import_antennaPattern(self, polarization, teta_ref=29.45):
+    def import_antennaPattern(self, polarization):
         ''' Import antenna pattern from annotation XML DOM '''
+        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
         antennaPatternList = self.annotationXML[polarization].getElementsByTagName('antennaPattern')
         antennaPatternList = antennaPatternList[1:]
-        antennaPattern = { '%s%s' % (self.obsMode, li):
-                               { 'azimuthTime':[],
-                                 'slantRangeTime':[],
-                                 'elevationAngle':[],
-                                 'elevationPattern':[],
-                                 'incidenceAngle':[],
-                                 'terrainHeight':[],
-                                 'roll':[] }
-                           for li in self.swath_ids }
+        keys = ['azimuthTime', 'slantRangeTime', 'elevationAngle', 'elevationPattern', 'incidenceAngle', 'terrainHeight', 'roll']
+        antennaPattern = {swath_name: {key: [] for key in keys} for swath_name in swath_names}
+        compute_roll = False
         for iList in antennaPatternList:
-            swath = get_DOM_nodeValue(iList,['swath'])
+            swath = get_DOM_nodeValue(iList, ['swath'])
             for k in antennaPattern[swath].keys():
                 if k=='azimuthTime':
                     antennaPattern[swath][k].append(
                         datetime.strptime(get_DOM_nodeValue(iList,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
-                elif k == 'roll' and self.IPFversion <= 2.36:
-                    # Sentinel-1-Level-1-Detailed-Algorithm-Definition.pdf, p. 9-12, eq. 9-19
-                    antennaPattern[swath][k].append(teta_ref)
+                elif k == 'roll' and len(iList.getElementsByTagName('roll')) == 0:
+                    antennaPattern[swath][k].append(None)
+                    compute_roll = True
                 else:
                     antennaPattern[swath][k].append(get_DOM_nodeValue(iList,[k],'float'))
+        if compute_roll:
+            for swath_name in swath_names:
+                antennaPattern[swath_name]['roll'] = self.compute_roll(polarization, antennaPattern[swath_name])
         return antennaPattern
+
+    def import_orbit(self, polarization):
+        ''' Import orbit information from annotation XML DOM '''
+        orbitList = self.annotationXML[polarization].getElementsByTagName('orbit')
+        orbit = { 'time':[],
+                  'position':{'x':[], 'y':[], 'z':[]},
+                  'velocity':{'x':[], 'y':[], 'z':[]} }
+        for iList in orbitList:
+            orbit['time'].append(
+                datetime.strptime(get_DOM_nodeValue(iList,['time']), '%Y-%m-%dT%H:%M:%S.%f'))
+            for k in orbit['position'].keys():
+                orbit['position'][k].append(
+                    get_DOM_nodeValue(iList,['position',k],'float'))
+            for k in orbit['velocity'].keys():
+                orbit['velocity'][k].append(
+                    get_DOM_nodeValue(iList,['velocity',k],'float'))
+        return orbit
+
+    def orbitAtGivenTime(self, polarization, relativeAzimuthTime):
+        ''' Interpolate orbit parameters for given time vector '''
+        stateVectors = self.import_orbit(polarization)
+        orbitTime = np.array([ (t-self.time_coverage_center).total_seconds()
+                                for t in stateVectors['time'] ])
+        orbitAtGivenTime = { 'relativeAzimuthTime':relativeAzimuthTime,
+                             'positionXYZ':[],
+                             'velocityXYZ':[] }
+        for t in relativeAzimuthTime:
+            useIndices = sorted(np.argsort(abs(orbitTime-t))[:4])
+            for k in ['position', 'velocity']:
+                orbitAtGivenTime[k+'XYZ'].append([
+                    cubic_hermite_interpolation(orbitTime[useIndices],
+                        np.array(stateVectors[k][component])[useIndices], t)
+                    for component in ['x','y','z'] ])
+        for k in ['positionXYZ', 'velocityXYZ']:
+            orbitAtGivenTime[k] = np.squeeze(orbitAtGivenTime[k])
+        return orbitAtGivenTime
+
+    def compute_roll(self, polarization, antenna_pattern):
+        relativeAzimuthTime = np.array([
+            (t - self.time_coverage_center).total_seconds()
+            for t in antenna_pattern['azimuthTime']
+        ])
+        positionXYZ = self.orbitAtGivenTime(polarization, relativeAzimuthTime)['positionXYZ']
+        satelliteLatitude = np.arctan2(positionXYZ[:,2], np.sqrt(positionXYZ[:,0]**2 + positionXYZ[:,1]**2))
+        r_major = 6378137.0            # WGS84 semi-major axis
+        r_minor = 6356752.314245179    # WGS84 semi-minor axis
+        earthRadius = np.sqrt(  (  (r_major**2 * np.cos(satelliteLatitude))**2
+                                + (r_minor**2 * np.sin(satelliteLatitude))**2)
+                            / (  (r_major * np.cos(satelliteLatitude))**2
+                                + (r_minor * np.sin(satelliteLatitude))**2) )
+        satelliteAltitude = np.linalg.norm(positionXYZ, axis=1) - earthRadius
+        # see Eq.9-19 in the reference R2.
+        rollAngle = 29.45 - 0.0566*(satelliteAltitude/1000. - 711.7)
+        return rollAngle
 
     def load_denoising_parameters_json(self):
         denoise_filename = os.path.join(
