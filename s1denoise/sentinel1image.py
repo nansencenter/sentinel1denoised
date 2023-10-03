@@ -197,11 +197,12 @@ class Sentinel1Image(Nansat):
                     swath_indices[v1][valid2] = iswath + 1
         return swath_indices
 
-    def get_apg_vectors(self, polarization, line, pixel, min_size=3):
+    def get_eap_rsl_vectors(self, polarization, line, pixel, min_size=3):
         """ Compute Antenna Pattern Gain APG=(1/EAP/RSL)**2 for each noise vectors """
-        apg_vectors = [np.zeros(p.size) + np.nan for p in pixel]
+        eap_vectors = [np.zeros(p.size) + np.nan for p in pixel]
+        rsl_vectors = [np.zeros(p.size) + np.nan for p in pixel]
         swath_indices = self.get_swath_id_vectors(polarization, line, pixel)
-        
+
         for swid in self.swath_ids:
             swath_name = f'{self.obsMode}{swid}'
             eap_interpolator = self.get_eap_interpolator(swath_name, polarization)
@@ -213,9 +214,15 @@ class Sentinel1Image(Nansat):
                     ba = ba_interpolator(l, p[gpi]).flatten()                    
                     eap = eap_interpolator(ba).flatten()
                     rsl = rsl_interpolator(l, p[gpi]).flatten()
-                    apg = (1 / eap / rsl) ** 2
-                    apg_vectors[i][gpi] = apg
-            
+                    eap_vectors[i][gpi] = eap
+                    rsl_vectors[i][gpi] = rsl
+
+        return eap_vectors, rsl_vectors
+
+    def get_apg_vectors(self, polarization, line, pixel, min_size=3):
+        """ Compute Antenna Pattern Gain APG=(1/EAP/RSL)**2 for each noise vectors """
+        eap_vectors, rsl_vectors = self.get_eap_rsl_vectors(polarization, line, pixel, min_size=min_size)
+        apg_vectors = [(1 / eap / rsl) ** 2 for (eap,rsl) in zip(eap_vectors, rsl_vectors)]
         return apg_vectors
 
     def get_apg_scales_offsets(self):
@@ -488,17 +495,23 @@ class Sentinel1Image(Nansat):
             raw_sigma0[i] = dn_mean[pixel[i]]**2 / cal_s0[i]**2
         return raw_sigma0
 
-    def get_raw_sigma0_vectors_from_full_size(self, polarization, line, pixel, sigma0_fs, average_lines=111):
-        """ Read DN_ values from input GeoTIff for a given lines, average in azimuth direction,
-        compute sigma0, and return sigma0 for given pixels
-
-        """
-        ws2 = np.floor(average_lines / 2)
+    def get_raw_sigma0_vectors_from_full_size(self, line, pixel, swath_ids, sigma0_fs, wsy=20, wsx=5):
         raw_sigma0 = [np.zeros(p.size)+np.nan for p in pixel]
         for i in range(line.shape[0]):
-            y0 = max(0, line[i]-ws2)
-            y1 = min(sigma0_fs.shape[0], line[i]+ws2)
-            raw_sigma0[i] = np.nanmean(sigma0_fs[int(y0):int(y1)], axis=0)[pixel[i]]
+            y0 = max(0, line[i]-wsy)
+            y1 = min(sigma0_fs.shape[0], line[i]+wsy)+1
+            if wsx == 0:
+                raw_sigma0[i] = np.nanmean(sigma0_fs[int(y0):int(y1)], axis=0)[pixel[i]]
+            else:
+                for j in range(1,6):
+                    gpi = swath_ids[i] == j
+                    s0_gpi = []
+                    for p in pixel[i][gpi]:
+                        x0 = max(pixel[i][gpi].min(), p-wsx)
+                        x1 = min(pixel[i][gpi].max(), p+wsx)+1
+                        s0_window = sigma0_fs[int(y0):int(y1), int(x0):int(x1)]
+                        s0_gpi.append(np.nanmean(s0_window))
+                    raw_sigma0[i][gpi] = s0_gpi
         return raw_sigma0
 
     def get_lons_vectors_from_full_size(self, line, pixel, lons_fs):
