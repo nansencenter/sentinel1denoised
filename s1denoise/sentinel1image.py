@@ -495,7 +495,7 @@ class Sentinel1Image(Nansat):
             raw_sigma0[i] = dn_mean[pixel[i]]**2 / cal_s0[i]**2
         return raw_sigma0
 
-    def get_raw_sigma0_vectors_from_full_size(self, line, pixel, swath_ids, sigma0_fs, wsy=20, wsx=5):
+    def get_raw_sigma0_vectors_from_full_size(self, line, pixel, swath_ids, sigma0_fs, wsy=20, wsx=5, avg_func=np.nanmean):
         raw_sigma0 = [np.zeros(p.size)+np.nan for p in pixel]
         for i in range(line.shape[0]):
             y0 = max(0, line[i]-wsy)
@@ -510,7 +510,7 @@ class Sentinel1Image(Nansat):
                         x0 = max(pixel[i][gpi].min(), p-wsx)
                         x1 = min(pixel[i][gpi].max(), p+wsx)+1
                         s0_window = sigma0_fs[int(y0):int(y1), int(x0):int(x1)]
-                        s0_gpi.append(np.nanmean(s0_window))
+                        s0_gpi.append(avg_func(s0_window))
                     raw_sigma0[i][gpi] = s0_gpi
         return raw_sigma0
 
