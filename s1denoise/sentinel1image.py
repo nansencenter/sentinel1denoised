@@ -1,17 +1,19 @@
+from collections import defaultdict
 from datetime import datetime, timedelta
 import glob
 import json
 import os
 import requests
 import shutil
-import subprocess
 import xml.etree.ElementTree as ET
 from xml.dom.minidom import parse, parseString
 import zipfile
+from functools import cached_property
 
 from nansat import Nansat
 import numpy as np
 from osgeo import gdal
+from bs4 import BeautifulSoup
 from scipy.interpolate import InterpolatedUnivariateSpline, RectBivariateSpline
 from scipy.optimize import minimize
 from scipy.interpolate import interp1d
@@ -26,6 +28,16 @@ from s1denoise.utils import (
 )
 
 SPEED_OF_LIGHT = 299792458.
+RADAR_FREQUENCY = 5.405000454334350e+09
+RADAR_WAVELENGTH = SPEED_OF_LIGHT / RADAR_FREQUENCY
+ANTENNA_STEERING_RATE = { 'IW1': 1.590368784,
+                          'IW2': 0.979863325,
+                          'IW3': 1.397440818,
+                          'EW1': 2.390895448,
+                          'EW2': 2.811502724,
+                          'EW3': 2.366195855,
+                          'EW4': 2.512694636,
+                          'EW5': 2.122855427 }    # degrees per second. Available from AUX_INS
 
 
 class Sentinel1Image(Nansat):
@@ -118,6 +130,14 @@ class Sentinel1Image(Nansat):
         self.download_aux_calibration(auxCalibFilename, self.platform.lower())
         self.auxiliaryCalibrationXML = parse(self.auxiliaryCalibration_file)
 
+    @cached_property
+    def scallopingGain(self, polarization='HV'):
+        sg = {}
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            subswathID = '%s%s' % (self.obsMode, iSW)
+            sg[subswathID] = self.get_subswathScallopingGain(polarization, subswathID)
+        return sg
+
     def set_aux_data_dir(self):
         """ Set directory where aux calibration data is stored """
         self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.path.expanduser('~')),
@@ -169,7 +189,6 @@ class Sentinel1Image(Nansat):
 
         for pix, n in zip(noiseRangeVector['pixel'], noiseRangeVector['noiseRangeLut']):
             n = np.array(n)
-            n[n == 0] = np.nan
             noise.append(n)
             pixel.append(np.array(pix))
             
@@ -261,9 +280,12 @@ class Sentinel1Image(Nansat):
                     (pixel[v1] >= frs) *
                     (pixel[v1] <= lrs) *
                     np.isfinite(z[v1]))[0]
-                # interpolator for one line
-                z_interp1 = InterpolatedUnivariateSpline(pixel[v1][valid2], z[v1][valid2])
-                z_vecs.append(z_interp1(pix_vec_fr))
+                if valid2.size == 0:
+                    z_vecs.append(np.zeros(pix_vec_fr.shape) + np.nan)
+                else:
+                    # interpolator for one line
+                    z_interp1 = InterpolatedUnivariateSpline(pixel[v1][valid2], z[v1][valid2])
+                    z_vecs.append(z_interp1(pix_vec_fr))
         # interpolator for one subswath
         z_interp2 = RectBivariateSpline(swath_lines, pix_vec_fr, np.array(z_vecs))
         return z_interp2, swath_coords
@@ -305,31 +327,6 @@ class Sentinel1Image(Nansat):
                         (pixel[v1] <= lrs))[0]
                     sigma0_vecs[v1][valid2] = sigma0interp(line[v1], pixel[v1][valid2])        
         return sigma0_vecs
-
-    def get_noise_azimuth_vectors(self, polarization, line, pixel):
-        """ Interpolate scalloping noise from XML files to input pixel/lines coords """
-        scall = [np.zeros(p.size)+np.nan for p in pixel]
-        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
-        for iSW in self.swath_ids:
-            subswathID = '%s%s' % (self.obsMode, iSW)
-            numberOfBlocks = len(noiseAzimuthVector[subswathID]['firstAzimuthLine'])
-            for iBlk in range(numberOfBlocks):
-                frs = noiseAzimuthVector[subswathID]['firstRangeSample'][iBlk]
-                lrs = noiseAzimuthVector[subswathID]['lastRangeSample'][iBlk]
-                fal = noiseAzimuthVector[subswathID]['firstAzimuthLine'][iBlk]
-                lal = noiseAzimuthVector[subswathID]['lastAzimuthLine'][iBlk]
-                y = np.array(noiseAzimuthVector[subswathID]['line'][iBlk])
-                z = np.array(noiseAzimuthVector[subswathID]['noiseAzimuthLut'][iBlk])
-                if y.size > 1:
-                    nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
-                else:
-                    nav_interp = lambda x: z
-
-                line_gpi = np.where((line >= fal) * (line <= lal))[0]
-                for line_i in line_gpi:
-                    pixel_gpi = np.where((pixel[line_i] >= frs) * (pixel[line_i] <= lrs))[0]
-                    scall[line_i][pixel_gpi] = nav_interp(line[line_i])
-        return scall
 
     def calibrate_noise_vectors(self, noise, cal_s0, scall):
         """ Compute calibrated NESZ from input noise, sigma0 calibration and scalloping noise"""
@@ -404,12 +401,12 @@ class Sentinel1Image(Nansat):
         rsp_interpolator = RectBivariateSpline(yggp, xggp, rangeSpreadingLoss)
         return rsp_interpolator
 
-    def get_shifted_noise_vectors(self, polarization, line, pixel, noise, skip = 4):
+    def get_shifted_noise_vectors(self, polarization, line, pixel, noise, skip=4, min_valid_size=10):
         """
         Estimate shift in range noise LUT relative to antenna gain pattern and correct for it.
 
         """
-        noise_shifted = [np.zeros(p.size)+np.nan for p in pixel]
+        noise_shifted = [np.zeros(p.size) for p in pixel]
         swathBounds = self.import_swathBounds(polarization)
         # noise lut shift
         for swid in self.swath_ids:
@@ -433,23 +430,24 @@ class Sentinel1Image(Nansat):
                         (pixel[v1] >= frs) *
                         (pixel[v1] <= lrs) *
                         (np.isfinite(noise[v1])))[0]
-                    # keep only unique pixels
-                    valid_pix, valid_pix_i = np.unique(pixel[v1][valid2], return_index=True)
-                    valid2 = valid2[valid_pix_i]
+                    if valid2.size >= min_valid_size:
+                        # keep only unique pixels
+                        valid_pix, valid_pix_i = np.unique(pixel[v1][valid2], return_index=True)
+                        valid2 = valid2[valid_pix_i]
 
-                    ba = ba_interpolator(valid_lin, valid_pix).flatten()
-                    eap = eap_interpolator(ba).flatten()
-                    rsp = rsp_interpolator(valid_lin, valid_pix).flatten()
-                    apg = (1/eap/rsp)**2
+                        ba = ba_interpolator(valid_lin, valid_pix).flatten()
+                        eap = eap_interpolator(ba).flatten()
+                        rsp = rsp_interpolator(valid_lin, valid_pix).flatten()
+                        apg = (1/eap/rsp)**2
 
-                    noise_valid = np.array(noise[v1][valid2])
-                    if np.allclose(noise_valid, noise_valid[0]):
-                        noise_shifted[v1][valid2] = noise_valid
-                    else:
-                        noise_interpolator = InterpolatedUnivariateSpline(valid_pix, noise_valid)
-                        pixel_shift = minimize(cost, 0, args=(valid_pix[skip:-skip], noise_interpolator, apg[skip:-skip])).x[0]
-                        noise_shifted0 = noise_interpolator(valid_pix + pixel_shift)
-                        noise_shifted[v1][valid2] = noise_shifted0
+                        noise_valid = np.array(noise[v1][valid2])
+                        if np.allclose(noise_valid, noise_valid[0]):
+                            noise_shifted[v1][valid2] = noise_valid
+                        else:
+                            noise_interpolator = InterpolatedUnivariateSpline(valid_pix, noise_valid)
+                            pixel_shift = minimize(cost, 0, args=(valid_pix[skip:-skip], noise_interpolator, apg[skip:-skip])).x[0]
+                            noise_shifted0 = noise_interpolator(valid_pix + pixel_shift)
+                            noise_shifted[v1][valid2] = noise_shifted0
 
         return noise_shifted
 
@@ -774,32 +772,6 @@ class Sentinel1Image(Nansat):
                     results[swath_name][key].append(tmp_results[swath_name][key])
 
         np.savez(self.filename.split('.')[0] + '_powerBalancing.npz', **results)
-
-    def get_scalloping_full_size(self, polarization):
-        """ Interpolate noise azimuth vector to full resolution for all blocks """
-        scall_fs = np.zeros(self.shape()) + np.nan
-        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
-        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
-        for swath_name in swath_names:
-            nav = noiseAzimuthVector[swath_name]
-            zipped = zip(
-                nav['firstAzimuthLine'],
-                nav['lastAzimuthLine'],
-                nav['firstRangeSample'],
-                nav['lastRangeSample'],
-                nav['line'],
-                nav['noiseAzimuthLut'],
-            )
-            for fal, lal, frs, lrs, y, z in zipped:
-                if isinstance(y, list):
-                    nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
-                else:
-                    nav_interp = lambda x: z
-                lin_vec_fr = np.arange(fal, lal+1)
-                z_vec_fr = nav_interp(lin_vec_fr)
-                z_arr = np.repeat([z_vec_fr], (lrs-frs+1), axis=0).T
-                scall_fs[fal:lal+1, frs:lrs+1] = z_arr
-        return scall_fs
 
     def interp_nrv_full_size(self, z, line, pixel, polarization, power=1):
         """ Interpolate noise range vectors to full size """
@@ -1261,3 +1233,266 @@ class Sentinel1Image(Nansat):
             sigma0o = fill_gaps(sigma0o, sigma0o <= s0_min)
 
         return sigma0o
+
+    def subswathIndexMap(self, polarization):
+        ''' Convert subswath indices into full grid pixels '''
+        subswathIndexMap = np.zeros(self.shape(), dtype=np.uint8)
+        swathBounds = self.import_swathBounds(polarization)
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            swathBound = swathBounds['%s%s' % (self.obsMode, iSW)]
+            zipped = zip(swathBound['firstAzimuthLine'],
+                         swathBound['firstRangeSample'],
+                         swathBound['lastAzimuthLine'],
+                         swathBound['lastRangeSample'])
+            for fal, frs, lal, lrs in zipped:
+                subswathIndexMap[fal:lal+1,frs:lrs+1] = iSW
+        return subswathIndexMap
+    
+    def import_azimuthAntennaElementPattern(self, polarization):
+        ''' Import azimuth antenna element pattern from auxiliary calibration XML DOM '''
+        calParamsList = self.auxiliaryCalibrationXML.getElementsByTagName('calibrationParams')
+        azimuthAntennaElementPattern = { '%s%s' % (self.obsMode, li):
+                                             { 'azimuthAngleIncrement':[],
+                                               'azimuthAntennaElementPattern':[],
+                                               'absoluteCalibrationConstant':[],
+                                               'noiseCalibrationFactor':[] }
+                                         for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
+        for iList in calParamsList:
+            swath = get_DOM_nodeValue(iList,['swath'])
+            pol = get_DOM_nodeValue(iList,['polarisation'])
+            if (swath in azimuthAntennaElementPattern.keys()) and (pol==polarization):
+                elem = iList.getElementsByTagName('azimuthAntennaElementPattern')[0]
+                for k in azimuthAntennaElementPattern[swath].keys():
+                    if k=='azimuthAngleIncrement':
+                        azimuthAntennaElementPattern[swath][k] = (
+                            get_DOM_nodeValue(elem,[k],'float') )
+                    elif k=='azimuthAntennaElementPattern':
+                        azimuthAntennaElementPattern[swath][k] = (
+                            get_DOM_nodeValue(elem,['values'],'float') )
+                    else:
+                        azimuthAntennaElementPattern[swath][k] = (
+                            get_DOM_nodeValue(iList,[k],'float') )
+        return azimuthAntennaElementPattern
+    
+    def subswathCenterSampleIndex(self, polarization):
+        ''' Range center pixel indices along azimuth for each subswath '''
+        swathBounds = self.import_swathBounds(polarization)
+        subswathCenterSampleIndex = {}
+        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+            subswathID = '%s%s' % (self.obsMode, iSW)
+            numberOfLines = (   np.array(swathBounds[subswathID]['lastAzimuthLine'])
+                              - np.array(swathBounds[subswathID]['firstAzimuthLine']) + 1 )
+            midPixelIndices = (   np.array(swathBounds[subswathID]['firstRangeSample'])
+                                + np.array(swathBounds[subswathID]['lastRangeSample']) ) / 2.
+            subswathCenterSampleIndex[subswathID] = int(round(
+                np.sum(midPixelIndices * numberOfLines) / np.sum(numberOfLines) ))
+        return subswathCenterSampleIndex
+    
+    def geolocationGridPointInterpolator(self, polarization, itemName):
+        ''' Generate interpolator for items in geolocation grid point list '''
+        geolocationGridPoint = self.import_geolocationGridPoint(polarization)
+        if itemName not in geolocationGridPoint.keys():
+            raise ValueError('%s is not in the geolocationGridPoint list.' % itemName)
+        x = np.unique(geolocationGridPoint['pixel'])
+        y = np.unique(geolocationGridPoint['line'])
+        if itemName=='azimuthTime':
+            z = [ (t-self.time_coverage_center).total_seconds()
+                  for t in geolocationGridPoint['azimuthTime'] ]
+            z = np.reshape(z,(len(y),len(x)))
+        else:
+            z = np.reshape(geolocationGridPoint[itemName],(len(y),len(x)))
+        interpolator = RectBivariateSpline(y, x, z)
+        return interpolator
+    
+    def azimuthFmRateAtGivenTime(self, polarization, relativeAzimuthTime, slantRangeTime):
+        ''' Get azimuth frequency modulation rate for given time vectors
+
+        Returns
+        -------
+        vector for all pixels in azimuth direction
+        '''
+        if relativeAzimuthTime.size != slantRangeTime.size:
+            raise ValueError('relativeAzimuthTime and slantRangeTime must have the same dimension')
+        azimuthFmRate = self.import_azimuthFmRate(polarization)
+        azimuthFmRatePolynomial = np.array(azimuthFmRate['azimuthFmRatePolynomial'])
+        t0 = np.array(azimuthFmRate['t0'])
+        xp = np.array([ (t-self.time_coverage_center).total_seconds()
+                        for t in azimuthFmRate['azimuthTime'] ])
+        azimuthFmRateAtGivenTime = []
+        for tt in zip(relativeAzimuthTime,slantRangeTime):
+            fp = (   azimuthFmRatePolynomial[:,0]
+                   + azimuthFmRatePolynomial[:,1] * (tt[1]-t0)**1
+                   + azimuthFmRatePolynomial[:,2] * (tt[1]-t0)**2 )
+            azimuthFmRateAtGivenTime.append(np.interp(tt[0], xp, fp))
+        return np.squeeze(azimuthFmRateAtGivenTime)
+    
+    def import_azimuthFmRate(self, polarization):
+        ''' Import azimuth frequency modulation rate from annotation XML DOM '''
+        soup = BeautifulSoup(self.annotationXML[polarization].toxml(), "lxml")
+        azimuthFmRate = defaultdict(list)
+        for afmr in soup.find_all('azimuthfmrate'):
+            azimuthFmRate['azimuthTime'].append(datetime.strptime(afmr.azimuthtime.text, '%Y-%m-%dT%H:%M:%S.%f'))
+            azimuthFmRate['t0'].append(float(afmr.t0.text))
+            if 'azimuthfmratepolynomial' in afmr.decode():
+                afmrp = list(map(float,afmr.azimuthfmratepolynomial.text.split(' ')))
+            elif 'c0' in afmr.decode() and 'c1' in afmr.decode() and 'c2' in afmr.decode():
+                afmrp = [float(afmr.c0.text), float(afmr.c1.text), float(afmr.c2.text)]
+            azimuthFmRate['azimuthFmRatePolynomial'].append(afmrp)
+        return azimuthFmRate
+    
+    def focusedBurstLengthInTime(self, polarization):
+        ''' Get focused burst length in zero-Doppler time domain
+
+        Returns
+        -------
+        focusedBurstLengthInTime : dict
+            one values for each subswath (different for IW and EW)
+        '''
+        azimuthFrequency = get_DOM_nodeValue(
+            self.annotationXML[polarization],['azimuthFrequency'],'float')
+        azimuthTimeIntevalInSLC = 1. / azimuthFrequency
+        inputDimensionsList = self.annotationXML[polarization].getElementsByTagName(
+            'inputDimensions')
+        focusedBurstLengthInTime = {}
+        # nominalLinesPerBurst should be smaller than the real values
+        nominalLinesPerBurst = {'IW':1450, 'EW':1100}[self.obsMode]
+        for iList in inputDimensionsList:
+            swath = get_DOM_nodeValue(iList,['swath'],'str')
+            numberOfInputLines = get_DOM_nodeValue(iList,['numberOfInputLines'],'int')
+            numberOfBursts = max(
+                [ primeNumber for primeNumber in range(1,numberOfInputLines//nominalLinesPerBurst+1)
+                  if (numberOfInputLines % primeNumber)==0 ] )
+            if (numberOfInputLines % numberOfBursts)==0:
+                focusedBurstLengthInTime[swath] = (
+                    numberOfInputLines / numberOfBursts * azimuthTimeIntevalInSLC )
+            else:
+                raise ValueError('number of bursts cannot be determined.')
+        return focusedBurstLengthInTime
+    
+    def get_subswathScallopingGain(self, polarization, subswathID):
+        # azimuth antenna element patterns (AAEP) lookup table for given subswath
+        AAEP = self.import_azimuthAntennaElementPattern(polarization)[subswathID]
+        gainAAEP = np.array(AAEP['azimuthAntennaElementPattern'])
+        angleAAEP = ( np.arange(-(len(gainAAEP)//2), len(gainAAEP)//2+1)
+                      * AAEP['azimuthAngleIncrement'] )
+        # subswath range center pixel index
+        subswathCenterSampleIndex = self.subswathCenterSampleIndex(polarization)[subswathID]
+        # slant range time along subswath range center
+        interpolator = self.geolocationGridPointInterpolator(polarization, 'slantRangeTime')
+        slantRangeTime = np.squeeze(interpolator(np.arange(self.shape()[0]), subswathCenterSampleIndex))
+        # relative azimuth time along subswath range center
+        interpolator = self.geolocationGridPointInterpolator(polarization, 'azimuthTime')
+        azimuthTime = np.squeeze(interpolator(np.arange(self.shape()[0]), subswathCenterSampleIndex))
+        # Doppler rate induced by satellite motion
+        motionDopplerRate = self.azimuthFmRateAtGivenTime(polarization, azimuthTime, slantRangeTime)
+        # antenna steering rate
+        antennaSteeringRate = np.deg2rad(ANTENNA_STEERING_RATE[subswathID])
+        # satellite absolute velocity along subswath range center
+        satelliteVelocity = np.linalg.norm(self.orbitAtGivenTime(polarization, azimuthTime)['velocityXYZ'], axis=1)
+        # Doppler rate induced by TOPS steering of antenna
+        steeringDopplerRate = 2 * satelliteVelocity / RADAR_WAVELENGTH * antennaSteeringRate
+        # combined Doppler rate (net effect)
+        combinedDopplerRate = motionDopplerRate * steeringDopplerRate / (motionDopplerRate - steeringDopplerRate)
+        # full burst length in zero-Doppler time
+        fullBurstLength = self.focusedBurstLengthInTime(polarization)[subswathID]
+        # zero-Doppler azimuth time at each burst start
+        burstStartTime = np.array([
+            (t-self.time_coverage_center).total_seconds()
+            for t in self.import_antennaPattern(polarization)[subswathID]['azimuthTime'] ])
+        # burst overlapping length
+        burstOverlap = fullBurstLength - np.diff(burstStartTime)
+        burstOverlap = np.hstack([burstOverlap[0], burstOverlap])
+        # time correction
+        burstStartTime += burstOverlap / 2.
+        # if burst start time does not cover the full image,
+        # add more sample points using the closest burst length
+        while burstStartTime[0] > azimuthTime[0]:
+            burstStartTime = np.hstack(
+                [burstStartTime[0] - np.diff(burstStartTime)[0], burstStartTime])
+        while burstStartTime[-1] < azimuthTime[-1]:
+            burstStartTime = np.hstack(
+                [burstStartTime, burstStartTime[-1] + np.diff(burstStartTime)[-1]])
+        # convert azimuth time to burst time
+        burstTime = np.copy(azimuthTime)
+        for li in range(len(burstStartTime)-1):
+            valid = (   (azimuthTime >= burstStartTime[li])
+                      * (azimuthTime < burstStartTime[li+1]) )
+            burstTime[valid] -= (burstStartTime[li] + burstStartTime[li+1]) / 2.
+        # compute antenna steering angle for each burst time
+        antennaSteeringAngle = np.rad2deg(
+            RADAR_WAVELENGTH / (2 * satelliteVelocity)
+            * combinedDopplerRate * burstTime )
+        # compute scalloping gain for each burst time
+        burstAAEP = np.interp(antennaSteeringAngle, angleAAEP, gainAAEP)
+        scallopingGain = 1. / 10**(burstAAEP/10.)
+        return scallopingGain
+
+    def get_noise_azimuth_vectors(self, polarization, line, pixel):
+        """ Interpolate scalloping noise from XML files to input line/pixel coords """
+        scall = [np.zeros(p.size) for p in pixel]
+        if self.IPFversion < 2.9:
+            swath_idvs = self.get_swath_id_vectors(polarization, line, pixel)
+            for i, l in enumerate(line):
+                for j in range(1,6):
+                    gpi = swath_idvs[i] == j
+                    scall[i][gpi] = self.scallopingGain[f'EW{j}'][l]            
+            return scall
+
+        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
+        for iSW in self.swath_ids:
+            subswathID = '%s%s' % (self.obsMode, iSW)
+            numberOfBlocks = len(noiseAzimuthVector[subswathID]['firstAzimuthLine'])
+            for iBlk in range(numberOfBlocks):
+                frs = noiseAzimuthVector[subswathID]['firstRangeSample'][iBlk]
+                lrs = noiseAzimuthVector[subswathID]['lastRangeSample'][iBlk]
+                fal = noiseAzimuthVector[subswathID]['firstAzimuthLine'][iBlk]
+                lal = noiseAzimuthVector[subswathID]['lastAzimuthLine'][iBlk]
+                y = np.array(noiseAzimuthVector[subswathID]['line'][iBlk])
+                z = np.array(noiseAzimuthVector[subswathID]['noiseAzimuthLut'][iBlk])
+                if y.size > 1:
+                    nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
+                else:
+                    nav_interp = lambda x: z
+
+                line_gpi = np.where((line >= fal) * (line <= lal))[0]
+                for line_i in line_gpi:
+                    pixel_gpi = np.where((pixel[line_i] >= frs) * (pixel[line_i] <= lrs))[0]
+                    scall[line_i][pixel_gpi] = nav_interp(line[line_i])
+        return scall
+
+    def get_scalloping_full_size(self, polarization):
+        """ Interpolate noise azimuth vector to full resolution for all blocks """
+        scall_fs = np.zeros(self.shape())
+        if self.IPFversion < 2.9:
+            subswathIndexMap = self.subswathIndexMap(polarization)
+            for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
+                subswathID = '%s%s' % (self.obsMode, iSW)
+                scallopingGain = self.scallopingGain[subswathID]
+                # assign computed scalloping gain into each subswath
+                valid = (subswathIndexMap==iSW)
+                scall_fs[valid] = (
+                    scallopingGain[:,np.newaxis] * np.ones((1,self.shape()[1])))[valid]
+            return scall_fs
+            
+        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
+        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
+        for swath_name in swath_names:
+            nav = noiseAzimuthVector[swath_name]
+            zipped = zip(
+                nav['firstAzimuthLine'],
+                nav['lastAzimuthLine'],
+                nav['firstRangeSample'],
+                nav['lastRangeSample'],
+                nav['line'],
+                nav['noiseAzimuthLut'],
+            )
+            for fal, lal, frs, lrs, y, z in zipped:
+                if isinstance(y, list):
+                    nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
+                else:
+                    nav_interp = lambda x: z
+                lin_vec_fr = np.arange(fal, lal+1)
+                z_vec_fr = nav_interp(lin_vec_fr)
+                z_arr = np.repeat([z_vec_fr], (lrs-frs+1), axis=0).T
+                scall_fs[fal:lal+1, frs:lrs+1] = z_arr
+        return scall_fs    

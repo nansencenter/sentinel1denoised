@@ -80,8 +80,6 @@ def main():
 
         dn_hv[dn_hv < 20] = np.nan
         sigma0hv = s1.get_raw_sigma0_vectors_from_full_size(line, pixel, swath_ids, dn_hv)
-        sigma0hv_p10 = s1.get_raw_sigma0_vectors_from_full_size(line, pixel, swath_ids, dn_hv, avg_func=lambda x: np.nanpercentile(x, 10))
-        sigma0hv_p20 = s1.get_raw_sigma0_vectors_from_full_size(line, pixel, swath_ids, dn_hv, avg_func=lambda x: np.nanpercentile(x, 20))
 
         pgpp, pgpa = get_pgpp_pgpa(s1)
         kproc = read_kproc(s1)
@@ -103,8 +101,6 @@ def main():
             cal_s0hv=cal_s0hv,
             scall_hv=scall_hv,
             sigma0hv=sigma0hv,
-            sigma0hv_p10=sigma0hv_p10,
-            sigma0hv_p20=sigma0hv_p20,
             pgpp=pgpp,
             pgpa=pgpa,
             kproc=kproc,

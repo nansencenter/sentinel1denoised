@@ -50,12 +50,11 @@ item_names = [
     'ipf'
 ]
 
-keep_names = ['ipf', 'sigma0hv', 'swath_ids', 'incang']
-
 polarization = 'HV'
 scale_APG = 1e21
 scale_HV = 1000
 s0hv_max = [None, 3.0, 1.3, 1.0, 0.9, 0.8]
+
 
 def parse_run_experiment_args():
     """ Parse input args for run_experiment_* scripts """
@@ -71,16 +70,22 @@ ifiles = sorted(glob.glob(f'{args.inp_dir}/S1*_apg.npz'))
 l = defaultdict(list)
 for ifile in ifiles:
     print('Read', ifile)
-    ds = np.load(ifile, allow_pickle=True)
-    d = {n: ds[n] for n in array_names}
+    try:
+        ds = np.load(ifile, allow_pickle=True)
+        d = {n: ds[n] for n in array_names}
+    except:
+        # TEMPORARY!
+        # skip if file is written at the moment
+        continue
+
     d.update({n: ds[n].item() for n in item_names})
     sigma0hv = d['sigma0hv'] ** 2 / d['cal_s0hv'] ** 2
     apg = (1 / d['eap'] / d['rsl']) ** 2 / d['cal_s0hv'] ** 2 * d['scall_hv']
     l['ipf'].append(d['ipf'])
-    l['apg'].append(apg)
-    l['sigma0hv'].append(sigma0hv)
-    l['swath_ids'].append(d['swath_ids'])
-    l['incang'].append(d['incang'])
+    l['apg'].append(apg[1:-1])
+    l['sigma0hv'].append(sigma0hv[1:-1])
+    l['swath_ids'].append(d['swath_ids'][1:-1])
+    l['incang'].append(d['incang'][1:-1])
 
 ll = defaultdict(list)
 for ipf, apg, sigma0hv, swath_ids, incang, ifile in zip(l['ipf'], l['apg'], l['sigma0hv'], l['swath_ids'], l['incang'], ifiles):
@@ -111,10 +116,13 @@ for i, uid in enumerate(uids):
     B[uid], rmsd[uid] = solve(A, Y)
     Yrec = np.dot(A, B[uid])
     plt.plot(Y.flat, Yrec, 'k.', alpha=0.1)
-    plt.title(uid)
-    plt.savefig(f'{uid}_quality.png')
+    plt.plot(Y.flat, Y.flat, 'r-')
+    plt.title(f'{uid} {rmsd[uid]:1.2f}')
+    plt.xlim([0, 6])
+    plt.ylim([0, 6])
+    plt.gca().set_aspect('equal')
+    plt.savefig(f'{uid}_{hv_name}_quality.png')
     plt.close()
-
 
 p = safe_load(args.out_file)
 for uid in B:
