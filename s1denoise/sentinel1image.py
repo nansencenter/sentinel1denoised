@@ -1222,12 +1222,14 @@ class Sentinel1Image(Nansat):
             self.IPFversion = 3.1
         sigma0 = self.get_raw_sigma0_full_size(polarization, min_dn=min_dn)
         nesz = self.get_nesz_full_size(polarization, algorithm)
-        sigma0 -= nesz
-
         s0_offset = np.nanmean(nesz)
-        sigma0g = gaussian_filter(sigma0, window)
-        snr = sigma0g / nesz
-        sigma0o = (weight * sigma0g + snr * sigma0) / (weight + snr) + s0_offset
+        if s0_offset == 0:
+            sigma0o = sigma0
+        else:
+            sigma0 -= nesz
+            sigma0g = gaussian_filter(sigma0, window)
+            snr = sigma0g / nesz
+            sigma0o = (weight * sigma0g + snr * sigma0) / (weight + snr) + s0_offset
 
         if remove_negative:
             sigma0o = fill_gaps(sigma0o, sigma0o <= s0_min)
