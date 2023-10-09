@@ -15,6 +15,7 @@ def run_correction(ifile,
     angular_scale_crpol=-0.025,
     angular_offset=34.5,
     output_dtype=np.float32,
+    algorithm='NERSC',
     **kwargs):
     """ Run thermal, textural and angular correction of input Sentinel-1 file
 
@@ -54,7 +55,7 @@ def run_correction(ifile,
         parameters = s1.get_metadata(band_id='sigma0_%s' % pol)
         for i in ['dataType', 'PixelFunctionType', 'SourceBand', 'SourceFilename']:
             parameters.pop(i)
-        array = s1.remove_texture_noise(pol, **kwargs)
+        array = s1.remove_texture_noise(pol, algorithm=algorithm, **kwargs)
         array = 10 * np.log10(array) - scale[pol] * (inc - angular_offset)
         n.add_band(array=array.astype(output_dtype), parameters=parameters)
     n.set_metadata(s1.get_metadata())
