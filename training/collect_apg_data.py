@@ -8,7 +8,6 @@ python collect_apg_data.py /path/to/L1/GRD/files /path/to/output/dir
 """
 import argparse
 from collections import defaultdict
-import glob
 import os
 from pathlib import Path
 
@@ -62,13 +61,13 @@ def main():
             print(ofile, 'exists')
             continue
 
-        print(ifile)
-        s1 = Sentinel1Image(str(ifile))
         try:
+            s1 = Sentinel1Image(str(ifile))
             dn_hv = s1.get_GDALRasterBand('DN_HV').ReadAsArray().astype(float)
         except RuntimeError:
             print('GDAL cannot open ', ifile)
             continue
+        print('Process ', ifile)
 
         line, pixel, noise = s1.get_noise_range_vectors(polarization)
         swath_ids = s1.get_swath_id_vectors(polarization, line, pixel)

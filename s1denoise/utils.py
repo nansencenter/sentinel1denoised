@@ -98,7 +98,7 @@ def skip_swath_borders(swath_ids, skip=1):
         swath_ids_skip.append(swid_skip)
     return swath_ids_skip
 
-def build_AY_matrix(swath_ids, sigma0hv, apg, incang, s0hv_max):
+def build_AY_matrix(swath_ids, sigma0hv, apg, incang, s0hv_max, s0hv_apg_corr_min):
     "HV = 1, IA, 1, APG1, 1, APG2, 1, APG3, 1, APG4, 1, APG5"
 
     A_123 = []                  # [1]
@@ -107,9 +107,12 @@ def build_AY_matrix(swath_ids, sigma0hv, apg, incang, s0hv_max):
 
     for iswath in range(1,6):
         for swath_ids_v, sigma0hv_v, apg_v, incang_v in zip(swath_ids, sigma0hv, apg, incang):
-            gpi = np.where(swath_ids_v == iswath)[0]
+            gpi = np.where((swath_ids_v == iswath) * (np.isfinite(sigma0hv_v*apg_v)))[0]
             # append only small enough values of HV
-            if np.nanmean(sigma0hv_v[gpi]) < s0hv_max[iswath]:
+            if (
+                (np.nanmean(sigma0hv_v[gpi]) < s0hv_max[iswath]) and 
+                (pearsonr(sigma0hv_v[gpi], apg_v[gpi])[0] > s0hv_apg_corr_min[iswath])
+            ):
                 A_123.append([
                     np.ones(gpi.size),
                     incang_v[gpi],
