@@ -216,7 +216,7 @@ class Sentinel1Image(Nansat):
                     swath_indices[v1][valid2] = iswath + 1
         return swath_indices
 
-    def get_eap_rsl_vectors(self, polarization, line, pixel, min_size=3):
+    def get_eap_rsl_vectors(self, polarization, line, pixel, min_size=3, rsl_power=3./2.):
         """ Compute Antenna Pattern Gain APG=(1/EAP/RSL)**2 for each noise vectors """
         eap_vectors = [np.zeros(p.size) + np.nan for p in pixel]
         rsl_vectors = [np.zeros(p.size) + np.nan for p in pixel]
@@ -226,7 +226,7 @@ class Sentinel1Image(Nansat):
             swath_name = f'{self.obsMode}{swid}'
             eap_interpolator = self.get_eap_interpolator(swath_name, polarization)
             ba_interpolator = self.get_boresight_angle_interpolator(polarization)
-            rsl_interpolator = self.get_range_spread_loss_interpolator(polarization)
+            rsl_interpolator = self.get_range_spread_loss_interpolator(polarization, rsl_power=rsl_power)
             for i, (l, p, swids) in enumerate(zip(line, pixel, swath_indices)):
                 gpi = np.where(swids == swid)[0]
                 if gpi.size > min_size:
@@ -386,9 +386,9 @@ class Sentinel1Image(Nansat):
         boresight_angle_interpolator = RectBivariateSpline(yggp, xggp, boresight_map)
         return boresight_angle_interpolator
 
-    def get_range_spread_loss_interpolator(self, polarization):
-        """ Prepare interpolator for Range Spreading Loss.
-        It computes RSL for input x,y coordinates.
+    def get_range_spread_loss_interpolator(self, polarization, rsl_power=3./2.):
+        """ Prepare interpolator for Range Spreading Loss. It computes RSL for input x,y coordinates.
+        rsl_power : float power for RSL = (2 * Rref / time / C)^rsl_power
 
         """
         geolocationGridPoint = self.import_geolocationGridPoint(polarization)
@@ -397,11 +397,11 @@ class Sentinel1Image(Nansat):
         referenceRange = float(self.annotationXML[polarization].getElementsByTagName(
                     'referenceRange')[0].childNodes[0].nodeValue)
         slantRangeTime = np.reshape(geolocationGridPoint['slantRangeTime'],(len(yggp),len(xggp)))
-        rangeSpreadingLoss = (referenceRange / slantRangeTime / SPEED_OF_LIGHT * 2)**(3./2.)
+        rangeSpreadingLoss = (referenceRange / slantRangeTime / SPEED_OF_LIGHT * 2)**rsl_power
         rsp_interpolator = RectBivariateSpline(yggp, xggp, rangeSpreadingLoss)
         return rsp_interpolator
 
-    def get_shifted_noise_vectors(self, polarization, line, pixel, noise, skip=4, min_valid_size=10):
+    def get_shifted_noise_vectors(self, polarization, line, pixel, noise, skip=4, min_valid_size=10, rsl_power=3./2.):
         """
         Estimate shift in range noise LUT relative to antenna gain pattern and correct for it.
 
@@ -414,7 +414,7 @@ class Sentinel1Image(Nansat):
             swathBound = swathBounds[swath_name]
             eap_interpolator = self.get_eap_interpolator(swath_name, polarization)
             ba_interpolator = self.get_boresight_angle_interpolator(polarization)
-            rsp_interpolator = self.get_range_spread_loss_interpolator(polarization)
+            rsp_interpolator = self.get_range_spread_loss_interpolator(polarization, rsl_power=rsl_power)
             zipped = zip(
                 swathBound['firstAzimuthLine'],
                 swathBound['lastAzimuthLine'],
@@ -573,23 +573,30 @@ class Sentinel1Image(Nansat):
         return q_all
 
     def get_range_quality_metric(self, polarization='HV', **kwargs):
-        """ Compute sigma0 with three methods (ESA, SHIFTED, NERSC), compute RQM for each sigma0 """
+        """ Compute sigma0 with four methods (ESA, SHIFTED, NERSC, APG), compute RQM for each sigma0 """
         line, pixel, noise = self.get_noise_range_vectors(polarization)
         cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
+
+        if self.IPFversion < 2.9:
+            scall_esa = [np.ones(p.size) for p in pixel]
+        else:
+            scall_esa = self.get_noise_azimuth_vectors(polarization, line, pixel)
+        nesz_esa = self.calibrate_noise_vectors(noise, cal_s0, scall_esa)
         scall = self.get_noise_azimuth_vectors(polarization, line, pixel)
-        nesz = self.calibrate_noise_vectors(noise, cal_s0, scall)
         noise_shifted = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
         nesz_shifted = self.calibrate_noise_vectors(noise_shifted, cal_s0, scall)
         nesz_corrected = self.get_corrected_noise_vectors(polarization, line, pixel, nesz_shifted)
+        noise_apg = self.get_noise_apg_vectors(polarization, line, pixel)
+        nesz_apg = self.calibrate_noise_vectors(noise_apg, cal_s0, scall)
         sigma0 = self.get_raw_sigma0_vectors(polarization, line, pixel, cal_s0)
-        s0_esa   = [s0 - n0 for (s0,n0) in zip(sigma0, nesz)]
+        s0_esa   = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_esa)]
         s0_shift = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_shifted)]
         s0_nersc = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_corrected)]
-        q = [self.compute_rqm(s0, polarization, line, pixel, **kwargs) for s0 in [s0_esa, s0_shift, s0_nersc]]
-
-        alg_names = ['ESA', 'SHIFT', 'NERSC']
+        s0_apg   = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_apg)]
+        q = [self.compute_rqm(s0, polarization, line, pixel) for s0 in [s0_esa, s0_shift, s0_nersc, s0_apg]]
+        alg_names = ['ESA', 'SHIFT', 'NERSC', 'APG']
         var_names = ['RQM', 'AVG1', 'AVG2', 'STD1', 'STD2']
-        q_all = {}
+        q_all = {'IPF': self.IPFversion}
         for swid in self.swath_ids[:-1]:
             swath_name = f'{self.obsMode}{swid}'
             for alg_i, alg_name in enumerate(alg_names):

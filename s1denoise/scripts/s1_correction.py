@@ -13,7 +13,7 @@ def parse_args(args):
     parser.add_argument('ifile', type=str, help='input Sentinel-1 file in SAFE format')
     parser.add_argument('ofile', type=str, help='output GeoTIFF file')
     parser.add_argument('-m', '--mask', help='Export land mask as a numpy file', action='store_true')
-    parser.add_argument('-a', '--algorithm', help='Name of the algorithm to use', type=str, default='NESRC')
+    parser.add_argument('-a', '--algorithm', help='Name of the algorithm to use', type=str, default='NERSC')
     return parser.parse_args(args)
 
 

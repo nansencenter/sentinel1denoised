@@ -16,7 +16,6 @@ import glob
 from multiprocessing import Pool
 import numpy as np
 from s1denoise import Sentinel1Image
-from sentinel1calval import Sentinel1CalVal
 
 out_dir = None
 pol = None
@@ -87,7 +86,7 @@ def run_process(zipFile):
     if os.path.exists(out_fullname):
         print(f'{out_fullname} already exists.')
     else:
-        s1 = Sentinel1CalVal(zipFile)
+        s1 = Sentinel1Image(zipFile)
         func = getattr(s1, 'get_' + qm_name)
         res_qam = func(pol)
         print(res_qam)

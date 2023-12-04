@@ -28,7 +28,8 @@ import matplotlib.pyplot as plt
 from s1denoise.utils import skip_swath_borders, build_AY_matrix, solve
 from update_parameter_file import safe_load
 
-array_names = ['line',
+array_names = [
+    'line',
     'pixel',
     'noise',
     'swath_ids',
@@ -38,20 +39,19 @@ array_names = ['line',
     'incang',
     'cal_s0hv',
     'scall_hv',
-    'sigma0hv',
+    'dn_vectors',
 ]
 
 item_names = [
-    'pgpp',
-    'pgpa',
-    'kproc',
-    'ncf',
-    'acc',
-    'ipf'
+    'pg_amplitude',
+    'noise_po_co_fa',
+    'k_proc',
+    'noise_ca_fa',
+    'ipf',
 ]
 
 polarization = 'HV'
-scale_APG = 1e21
+scale_APG = 1e11
 scale_HV = 1000
 s0hv_max = [None, 3.0, 1.3, 1.0, 0.9, 0.8]
 s0hv_apg_corr_min = [None, 0.96, 0.89, 0.89, 0.95, 0.80]
@@ -108,19 +108,27 @@ ifiles = sorted(glob.glob(f'{args.inp_dir}/S1*_apg.npz'))
 l = defaultdict(list)
 for ifile in ifiles:
     print('Read', ifile)
-    try:
-        ds = np.load(ifile, allow_pickle=True)
-        d = {n: ds[n] for n in array_names}
-    except:
-        # TEMPORARY!
-        # skip if file is written at the moment
-        continue
-
+    # load data
+    ds = np.load(ifile, allow_pickle=True)
+    d = {n: ds[n] for n in array_names}
     d.update({n: ds[n].item() for n in item_names})
-    sigma0hv = d['sigma0hv'] ** 2 / d['cal_s0hv'] ** 2
-    apg = (1 / d['eap'] / d['rsl']) ** 2 / d['cal_s0hv'] ** 2 * d['scall_hv']
+
+    # compute values
+    sigma0hv = d['dn_vectors'] ** 2 / d['cal_s0hv'] ** 2
+    g_tots = []
+    for i, (jjj, eee, rrr, sss, ccc) in enumerate(zip(d['swath_ids'], d['eap'], d['rsl'], d['scall_hv'], d['cal_s0hv'])):
+        g_tot = sss / eee ** 2 / rrr ** 2 / ccc ** 2
+        for j in range(1,6):
+            gpi = jjj == j
+            key = f'EW{j}'
+            g_tot[gpi] *= d['k_proc'][key]
+            g_tot[gpi] *= d['noise_ca_fa'][key]
+            g_tot[gpi] *= d['pg_amplitude'][key][i]
+            g_tot[gpi] *= d['noise_po_co_fa'][key][i]
+        g_tots.append(g_tot)
+
     l['ipf'].append(d['ipf'])
-    l['apg'].append(apg[1:-1])
+    l['apg'].append(np.array(g_tots[1:-1]))
     l['sigma0hv'].append(sigma0hv[1:-1])
     l['swath_ids'].append(d['swath_ids'][1:-1])
     l['incang'].append(d['incang'][1:-1])
@@ -159,7 +167,7 @@ for i, uid in enumerate(uids):
     plt.xlim([0, 6])
     plt.ylim([0, 6])
     plt.gca().set_aspect('equal')
-    plt.savefig(f'{uid}_quality.png')
+    plt.savefig(f'{uid}_quality_pg.png')
     plt.close()
 
 uid_mapping  = get_uid_mapping(uids)
