@@ -51,7 +51,7 @@ item_names = [
 ]
 
 polarization = 'HV'
-scale_APG = 1e11
+scale_APG = 1e21
 scale_HV = 1000
 s0hv_max = [None, 3.0, 1.3, 1.0, 0.9, 0.8]
 s0hv_apg_corr_min = [None, 0.96, 0.89, 0.89, 0.95, 0.80]
@@ -104,12 +104,19 @@ def parse_run_experiment_args():
 
 args = parse_run_experiment_args()
 ifiles = sorted(glob.glob(f'{args.inp_dir}/S1*_apg.npz'))
+# good files
+gfiles = []
 
 l = defaultdict(list)
 for ifile in ifiles:
     print('Read', ifile)
     # load data
     ds = np.load(ifile, allow_pickle=True)
+    # 5: remove files withouth noise power correction factor (probably nrt-3h?)
+    # Fewer files in IPFs 2.36, 2.43, 2.45, 2.51, 2.52 (slightly better quality here), 2.53, 2.60, 
+    #if len(ds["noise_po_co_fa"].item().keys()) == 0:
+    #    continue
+    gfiles.append(ifile)
     d = {n: ds[n] for n in array_names}
     d.update({n: ds[n].item() for n in item_names})
 
@@ -117,14 +124,25 @@ for ifile in ifiles:
     sigma0hv = d['dn_vectors'] ** 2 / d['cal_s0hv'] ** 2
     g_tots = []
     for i, (jjj, eee, rrr, sss, ccc) in enumerate(zip(d['swath_ids'], d['eap'], d['rsl'], d['scall_hv'], d['cal_s0hv'])):
+        # 0: original
+        # g_tot = sss / eee ** 2 / rrr ** 1.5 / ccc ** 2
+        # 1: better correspondence
         g_tot = sss / eee ** 2 / rrr ** 2 / ccc ** 2
         for j in range(1,6):
             gpi = jjj == j
             key = f'EW{j}'
-            g_tot[gpi] *= d['k_proc'][key]
-            g_tot[gpi] *= d['noise_ca_fa'][key]
+            # 2: add k_proc (same as #1)
+            #g_tot[gpi] *= d['k_proc'][key]
+            # 3: add noise calibration factor (2.36 and 2.51 became much worse / unusable, other IPFs - same)
+            #g_tot[gpi] *= d['noise_ca_fa'][key]
+            # 4. add pg product amplitude (2.52 became a bit better but 2.36 and 2.51 are still anusable)
+            #g_tot[gpi] *= d['pg_amplitude'][key][i]
+            # 6. add noise power correction factor
+            # (2.36 much better, other IPFs not much different from 5. Some a slightly better. Some are slightly worse.)
+            #g_tot[gpi] *= d['noise_po_co_fa'][key][i]
+            # 7. only pg product amplitude (without kproc, noise_ca_fa, noise_po_co_fa, filtering by noise_po_co_fa presence)
+            # (almost the same as #1; some IPFs are a bit better; some a abit worse; number of usable files - the same)
             g_tot[gpi] *= d['pg_amplitude'][key][i]
-            g_tot[gpi] *= d['noise_po_co_fa'][key][i]
         g_tots.append(g_tot)
 
     l['ipf'].append(d['ipf'])
@@ -133,8 +151,18 @@ for ifile in ifiles:
     l['swath_ids'].append(d['swath_ids'][1:-1])
     l['incang'].append(d['incang'][1:-1])
 
+apg_all = np.hstack([np.hstack(i) for i in l['apg']])
+sigma0_all = np.hstack([np.hstack(i) for i in l['sigma0hv']])
+
+nanmean_apg =  np.nanmean(apg_all)
+nanmean_s0hv =  np.nanmean(sigma0_all)
+scale_APG = 2 / nanmean_apg
+print(f'\{nanmean_apg=} {nanmean_s0hv=} {scale_APG=}')
+print(f'{(nanmean_apg * scale_APG)=} {(nanmean_s0hv * scale_HV)=}\n')
+
+
 ll = defaultdict(list)
-for ipf, apg, sigma0hv, swath_ids, incang, ifile in zip(l['ipf'], l['apg'], l['sigma0hv'], l['swath_ids'], l['incang'], ifiles):
+for ipf, apg, sigma0hv, swath_ids, incang, ifile in zip(l['ipf'], l['apg'], l['sigma0hv'], l['swath_ids'], l['incang'], gfiles):
     print('Build', ifile)
     name_parts = os.path.basename(ifile).split('_')
     platform, mode, resolution, pol = name_parts[0], name_parts[1], name_parts[2], name_parts[3]
@@ -163,11 +191,11 @@ for i, uid in enumerate(uids):
     Yrec = np.dot(A, B[uid])
     plt.plot(Y.flat, Yrec, 'k.', alpha=0.1)
     plt.plot(Y.flat, Y.flat, 'r-')
-    plt.title(f'{uid} {rmsd[uid]:1.2f}')
+    plt.title(f'{uid} {uid_indices.size} {rmsd[uid]:1.2f}')
     plt.xlim([0, 6])
     plt.ylim([0, 6])
     plt.gca().set_aspect('equal')
-    plt.savefig(f'{uid}_quality_pg.png')
+    plt.savefig(f'{uid}_quality_pg7.png')
     plt.close()
 
 uid_mapping  = get_uid_mapping(uids)
