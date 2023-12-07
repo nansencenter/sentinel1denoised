@@ -157,8 +157,8 @@ sigma0_all = np.hstack([np.hstack(i) for i in l['sigma0hv']])
 nanmean_apg =  np.nanmean(apg_all)
 nanmean_s0hv =  np.nanmean(sigma0_all)
 scale_APG = 2 / nanmean_apg
-print(f'\{nanmean_apg=} {nanmean_s0hv=} {scale_APG=}')
-print(f'{(nanmean_apg * scale_APG)=} {(nanmean_s0hv * scale_HV)=}\n')
+print(f'\{nanmean_apg} {nanmean_s0hv} {scale_APG}')
+print(f'{(nanmean_apg * scale_APG)} {(nanmean_s0hv * scale_HV)}\n')
 
 
 ll = defaultdict(list)

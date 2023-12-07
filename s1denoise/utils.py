@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
 from scipy.stats import pearsonr
@@ -148,3 +149,5 @@ def solve(A, Y):
     Y_rec = np.dot(A, B[0])
     rmsd = np.sqrt(np.mean((Y - Y_rec)**2))
     return B[0].flatten(), rmsd
+
+parse_azimuth_time = lambda x : datetime.strptime(x, '%Y-%m-%dT%H:%M:%S.%f')

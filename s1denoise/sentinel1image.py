@@ -25,6 +25,7 @@ from s1denoise.utils import (
     get_DOM_nodeValue,
     fill_gaps,
     cubic_hermite_interpolation,
+    parse_azimuth_time,
 )
 
 SPEED_OF_LIGHT = 299792458.
@@ -72,6 +73,7 @@ class Sentinel1Image(Nansat):
                 noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
 
                 for polarization in [txPol + 'H', txPol + 'V']:
+                    # TODO: replace self.annotationXML[polarization].toxml() with raw XML
                     self.annotationXML[polarization] = parseString(
                             [zf.read(fn) for fn in annotationFiles if polarization.lower() in fn][0])
                     self.calibrationXML[polarization] = parseString(
@@ -116,7 +118,7 @@ class Sentinel1Image(Nansat):
         if self.IPFversion < 2.43:
             print('\nERROR: IPF version of input image is lower than 2.43! '
                   'Denoising vectors in annotation files are not qualified. '
-                  'Only APG-based denoising can be performed\n')
+                  'Only TG-based denoising can be performed\n')
         elif 2.43 <= self.IPFversion < 2.53:
             print('\nWARNING: IPF version of input image is lower than 2.53! '
                   'ESA default noise correction result might be wrong.\n')
@@ -137,6 +139,86 @@ class Sentinel1Image(Nansat):
             subswathID = '%s%s' % (self.obsMode, iSW)
             sg[subswathID] = self.get_subswathScallopingGain(polarization, subswathID)
         return sg
+
+    @cached_property
+    def swath_bounds(self):
+        """ Boundaries of blocks in each swath for each polarisation """
+        names = {
+            'azimuthTime' : parse_azimuth_time,
+            'firstAzimuthLine' : int,
+            'firstRangeSample' : int,
+            'lastAzimuthLine' : int,
+            'lastRangeSample' : int,
+        }
+
+        swath_bounds = {}
+        for pol in self.pols:
+            soup = BeautifulSoup(self.annotationXML[pol].toxml(), features="xml")
+            swath_bounds[pol] = {}
+            for swathMerge in soup.find_all('swathMerge'):
+                swath_bounds[pol][swathMerge.swath.text] = defaultdict(list)
+                for swathBounds in swathMerge.find_all('swathBounds'):
+                    for name in names:
+                        swath_bounds[pol][swathMerge.swath.text][name].append(names[name](swathBounds.find(name).text))
+        return swath_bounds
+
+    @cached_property
+    def geolocation(self):
+        ''' Import geolocationGridPoint from annotation XML DOM '''
+        geolocation_keys = {
+            'azimuthTime':   str, #lambda x : datetime.strptime(x, '%Y-%m-%dT%H:%M:%S.%f'),
+            'slantRangeTime':float,
+            'line':  int,
+            'pixel': int,
+            'latitude':float,
+            'longitude':float,
+            'height':float,
+            'incidenceAngle':float,
+            'elevationAngle':float,
+        }
+        geolocation = {}
+        for pol in self.pols:
+            soup = BeautifulSoup(self.annotationXML[pol].toxml(), features="xml")
+            geolocation[pol] = defaultdict(list)
+            for p in soup.find_all('geolocationGridPoint'):
+                for c in p:
+                    if c.name:
+                        geolocation[pol][c.name].append(geolocation_keys[c.name](c.text))
+            geolocation[pol]['line'] = np.unique(geolocation[pol]['line'])
+            geolocation[pol]['pixel'] = np.unique(geolocation[pol]['pixel'])
+            for i in geolocation[pol]:
+                if i not in ['line', 'pixel']:
+                    geolocation[pol][i] = np.array(geolocation[pol][i]).reshape(
+                        geolocation[pol]['line'].size,
+                        geolocation[pol]['pixel'].size
+                        )
+        return geolocation
+
+    @cached_property
+    def geolocation_relative_azimuth_time(self):
+        az_time = {}
+        for pol in self.pols:
+            az_time[pol] = list(map(parse_azimuth_time, self.geolocation[pol]['azimuthTime'].flat))
+            az_time[pol] = [ (t-self.time_coverage_center).total_seconds() for t in az_time[pol]]
+            az_time[pol] = np.array(az_time[pol]).reshape(self.geolocation[pol]['azimuthTime'].shape)
+        return az_time
+
+    @cached_property
+    def calibration(self):
+        calibration = {}
+        for pol in self.pols:
+            soup = BeautifulSoup(self.calibrationXML[pol].toxml(), features="xml")
+            calibration[pol] = defaultdict(list)
+            for cv in soup.find_all('calibrationVector'):
+                for n in cv:
+                    if n.name:
+                        calibration[pol][n.name].append(n.text)
+            calibration[pol]['azimuthTime'] = list(map(parse_azimuth_time, calibration[pol]['azimuthTime']))
+            calibration[pol]['line'] = np.array(list(map(int, calibration[pol]['line'])))
+            calibration[pol]['pixel'] = np.array([list(map(int, p.split())) for p in calibration[pol]['pixel']])
+            for key in ['sigmaNought', 'betaNought', 'gamma', 'dn']:
+                calibration[pol][key] = np.array([list(map(float, p.split())) for p in calibration[pol][key]])
+        return calibration
 
     def set_aux_data_dir(self):
         """ Set directory where aux calibration data is stored """
@@ -199,7 +281,7 @@ class Sentinel1Image(Nansat):
     
     def get_swath_id_vectors(self, polarization, line, pixel):
         swath_indices = [np.zeros(p.shape, int) for p in pixel]
-        swathBounds = self.import_swathBounds(polarization)
+        swathBounds = self.swath_bounds[polarization]
 
         for iswath, swath_name in enumerate(swathBounds):
             swathBound = swathBounds[swath_name]
@@ -238,16 +320,42 @@ class Sentinel1Image(Nansat):
 
         return eap_vectors, rsl_vectors
 
-    def get_apg_vectors(self, polarization, line, pixel, min_size=3):
-        """ Compute Antenna Pattern Gain APG=(1/EAP/RSL)**2 for each noise vectors """
-        eap_vectors, rsl_vectors = self.get_eap_rsl_vectors(polarization, line, pixel, min_size=min_size)
-        apg_vectors = [(1 / eap / rsl) ** 2 for (eap,rsl) in zip(eap_vectors, rsl_vectors)]
-        return apg_vectors
+    def get_pg_product(self, polarization, pg_name='pgProductAmplitude'):
+        noiseRangeVector, _ = self.import_noiseVector(polarization)
+        azimuth_time = [(t - self.time_coverage_center).total_seconds() for t in noiseRangeVector['azimuthTime']]
+        annotation_soup = BeautifulSoup(self.annotationXML[polarization].toxml(), features="xml")
+        pg = defaultdict(dict)
+        for pgpa in annotation_soup.find_all(pg_name):
+            pg[pgpa.parent.parent.parent.swath.text][pgpa.parent.azimuthTime.text] = float(pgpa.text)
 
-    def get_apg_scales_offsets(self):
+        pg_swaths = {}
+        for swid in pg:
+            rel_az_time = np.array([
+            (datetime.strptime(t, '%Y-%m-%dT%H:%M:%S.%f') - self.time_coverage_center).total_seconds()
+            for t in pg[swid]])
+            pgvec = np.array([pg[swid][i] for i in pg[swid]])
+            sortIndex = np.argsort(rel_az_time)
+            pg_interp = InterpolatedUnivariateSpline(rel_az_time[sortIndex], pgvec[sortIndex], k=1)
+            pg_vec = pg_interp(azimuth_time)
+            pg_swaths[swid] = pg_vec
+        return pg_swaths
+
+    def get_tg_vectors(self, polarization, line, pixel, min_size=3):
+        """ Compute Total Gain TG=Gtot*/(EAP/RSL)**2 for each noise vectors """
+        eap_vectors, rsl_vectors = self.get_eap_rsl_vectors(polarization, line, pixel, min_size=min_size, rsl_power=2)
+        tg_vectors = [(1 / eap / rsl) ** 2 for (eap,rsl) in zip(eap_vectors, rsl_vectors)]
+        swath_ids = self.get_swath_id_vectors(polarization, line, pixel)
+        pg_swaths = self.get_pg_product(polarization)
+        for i, gtot in enumerate(tg_vectors):
+            for j in range(1,6):
+                gpi = swath_ids[i] == j
+                gtot[gpi] *= pg_swaths[f'EW{j}'][i]
+        return tg_vectors
+
+    def get_tg_scales_offsets(self):
         params = self.load_denoising_parameters_json()
-        apg_id = f'{os.path.basename(self.filename)[:16]}_APG_{self.IPFversion:04.2f}'
-        p = params[apg_id]
+        tg_id = f'{os.path.basename(self.filename)[:16]}_APG_{self.IPFversion:04.2f}'
+        p = params[tg_id]
         offsets = []
         scales = []
         for i in range(5):
@@ -257,8 +365,7 @@ class Sentinel1Image(Nansat):
 
     def get_swath_interpolator(self, polarization, swath_name, line, pixel, z):
         """ Prepare interpolators for one swath """
-        swathBounds = self.import_swathBounds(polarization)
-        swathBound = swathBounds[swath_name]
+        swathBound = self.swath_bounds[polarization][swath_name]
         swath_coords = (
             swathBound['firstAzimuthLine'],
             swathBound['lastAzimuthLine'],
@@ -290,32 +397,33 @@ class Sentinel1Image(Nansat):
         z_interp2 = RectBivariateSpline(swath_lines, pix_vec_fr, np.array(z_vecs))
         return z_interp2, swath_coords
     
-    def get_elevation_incidence_angle_interpolators(self, polarization):
-        geolocationGridPoint = self.import_geolocationGridPoint(polarization)
-        xggp = np.unique(geolocationGridPoint['pixel'])
-        yggp = np.unique(geolocationGridPoint['line'])
-        elevation_map = np.array(geolocationGridPoint['elevationAngle']).reshape(len(yggp), len(xggp))
-        incidence_map = np.array(geolocationGridPoint['incidenceAngle']).reshape(len(yggp), len(xggp))
-        elevation_angle_interpolator = RectBivariateSpline(yggp, xggp, elevation_map)
-        incidence_angle_interpolator = RectBivariateSpline(yggp, xggp, incidence_map)
-        return elevation_angle_interpolator, incidence_angle_interpolator
+    def get_elevation_incidence_angle_interpolators(self, p):
+        return (
+            RectBivariateSpline(
+                self.geolocation[p]['line'],
+                self.geolocation[p]['pixel'],
+                self.geolocation[p]['elevationAngle']), 
+            RectBivariateSpline(
+                self.geolocation[p]['line'],
+                self.geolocation[p]['pixel'],
+                self.geolocation[p]['incidenceAngle'])
+            )
 
     def get_elevation_incidence_angle_vectors(self, ea_interpolator, ia_interpolator, line, pixel):
         ea = [ea_interpolator(l, p).flatten() for (l, p) in zip(line, pixel)]
         ia = [ia_interpolator(l, p).flatten() for (l, p) in zip(line, pixel)]
         return ea, ia
 
-    def get_calibration_vectors(self, polarization, line, pixel, name='sigmaNought'):
+    def get_calibration_vectors(self, pol, line, pixel, name='sigmaNought'):
         swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
-        calibrationVector = self.import_calibrationVector(polarization)
-        s0line = np.array(calibrationVector['line'])
-        s0pixel = np.array(calibrationVector['pixel'])
-        sigma0 = np.array(calibrationVector[name])
+        s0line = self.calibration[pol]['line']
+        s0pixel = self.calibration[pol]['pixel']
+        sigma0 = self.calibration[pol][name]
 
         sigma0_vecs = [np.zeros_like(p_vec) + np.nan for p_vec in pixel]
 
         for swath_name in swath_names:
-            sigma0interp, swath_coords = self.get_swath_interpolator(polarization, swath_name, s0line, s0pixel, sigma0)
+            sigma0interp, swath_coords = self.get_swath_interpolator(pol, swath_name, s0line, s0pixel, sigma0)
 
             for fal, lal, frs, lrs in zip(*swath_coords):
                 valid1 = np.where((line >= fal) * (line <= lal))[0]
@@ -352,18 +460,9 @@ class Sentinel1Image(Nansat):
         eap_interpolator = InterpolatedUnivariateSpline(angleLUT, np.sqrt(amplitudeLUT))
         return eap_interpolator
     
-    def get_boresight_angle_interpolator(self, polarization):
-        """
-        Prepare interpolator for boresaight angles.
-        It computes BA for input x,y coordinates.
-
-        """
-        geolocationGridPoint = self.import_geolocationGridPoint(polarization)
-        xggp = np.unique(geolocationGridPoint['pixel'])
-        yggp = np.unique(geolocationGridPoint['line'])
-        elevation_map = np.array(geolocationGridPoint['elevationAngle']).reshape(len(yggp), len(xggp))
-
-        antennaPattern = self.import_antennaPattern(polarization)
+    def get_boresight_angle_interpolator(self, pol):
+        """ Prepare interpolator for boresight angles. It computes BA for input x,y coordinates. """
+        antennaPattern = self.import_antennaPattern(pol)
         relativeAzimuthTime = []
         for iSW in self.swath_ids:
             subswathID = '%s%s' % (self.obsMode, iSW)
@@ -378,27 +477,23 @@ class Sentinel1Image(Nansat):
         relativeAzimuthTime = np.hstack(relativeAzimuthTime)
         rollAngle = np.hstack(rollAngle)
         rollAngleIntp = InterpolatedUnivariateSpline(relativeAzimuthTime[sortIndex], rollAngle[sortIndex])
-        azimuthTime = [ (t-self.time_coverage_center).total_seconds() for t in geolocationGridPoint['azimuthTime'] ]
-        azimuthTime = np.reshape(azimuthTime, (len(yggp), len(xggp)))
-        roll_map = rollAngleIntp(azimuthTime)
+        roll_map = rollAngleIntp(self.geolocation_relative_azimuth_time[pol])
 
-        boresight_map = elevation_map - roll_map
-        boresight_angle_interpolator = RectBivariateSpline(yggp, xggp, boresight_map)
+        boresight_map = self.geolocation[pol]['elevationAngle'] - roll_map
+        boresight_angle_interpolator = RectBivariateSpline(
+            self.geolocation[pol]['line'], self.geolocation[pol]['pixel'], boresight_map)
         return boresight_angle_interpolator
 
-    def get_range_spread_loss_interpolator(self, polarization, rsl_power=3./2.):
+    def get_range_spread_loss_interpolator(self, pol, rsl_power=3./2.):
         """ Prepare interpolator for Range Spreading Loss. It computes RSL for input x,y coordinates.
         rsl_power : float power for RSL = (2 * Rref / time / C)^rsl_power
 
         """
-        geolocationGridPoint = self.import_geolocationGridPoint(polarization)
-        xggp = np.unique(geolocationGridPoint['pixel'])
-        yggp = np.unique(geolocationGridPoint['line'])
-        referenceRange = float(self.annotationXML[polarization].getElementsByTagName(
+        referenceRange = float(self.annotationXML[pol].getElementsByTagName(
                     'referenceRange')[0].childNodes[0].nodeValue)
-        slantRangeTime = np.reshape(geolocationGridPoint['slantRangeTime'],(len(yggp),len(xggp)))
-        rangeSpreadingLoss = (referenceRange / slantRangeTime / SPEED_OF_LIGHT * 2)**rsl_power
-        rsp_interpolator = RectBivariateSpline(yggp, xggp, rangeSpreadingLoss)
+        rangeSpreadingLoss = (referenceRange / self.geolocation[pol]['slantRangeTime'] / SPEED_OF_LIGHT * 2)**rsl_power
+        rsp_interpolator = RectBivariateSpline(
+            self.geolocation[pol]['line'], self.geolocation[pol]['pixel'], rangeSpreadingLoss)
         return rsp_interpolator
 
     def get_shifted_noise_vectors(self, polarization, line, pixel, noise, skip=4, min_valid_size=10, rsl_power=3./2.):
@@ -407,11 +502,10 @@ class Sentinel1Image(Nansat):
 
         """
         noise_shifted = [np.zeros(p.size) for p in pixel]
-        swathBounds = self.import_swathBounds(polarization)
         # noise lut shift
         for swid in self.swath_ids:
             swath_name = f'{self.obsMode}{swid}'
-            swathBound = swathBounds[swath_name]
+            swathBound = self.swath_bounds[polarization][swath_name]
             eap_interpolator = self.get_eap_interpolator(swath_name, polarization)
             ba_interpolator = self.get_boresight_angle_interpolator(polarization)
             rsp_interpolator = self.get_range_spread_loss_interpolator(polarization, rsl_power=rsl_power)
@@ -454,11 +548,10 @@ class Sentinel1Image(Nansat):
     def get_corrected_noise_vectors(self, polarization, line, pixel, nesz, add_pb=True):
         """ Load scaling and offset coefficients from files and apply to input  NESZ """
         nesz_corrected = [np.zeros(p.size)+np.nan for p in pixel]
-        swathBounds = self.import_swathBounds(polarization)
         ns, pb = self.import_denoisingCoefficients(polarization)[:2]
         for swid in self.swath_ids:
             swath_name = f'{self.obsMode}{swid}'
-            swathBound = swathBounds[swath_name]
+            swathBound = self.swath_bounds[polarization][swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
                 swathBound['lastAzimuthLine'],
@@ -544,12 +637,11 @@ class Sentinel1Image(Nansat):
 
     def compute_rqm(self, s0, polarization, line, pixel, num_px=100, **kwargs):
         """ Compute Range Quality Metric from the input sigma0 """
-        swathBounds = self.import_swathBounds(polarization)
         q_all = {}
         for swid in self.swath_ids[:-1]:
             q_subswath = []
             swath_name = f'{self.obsMode}{swid}'
-            swathBound = swathBounds[swath_name]
+            swathBound = self.swath_bounds[polarization][swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
                 swathBound['lastAzimuthLine'],
@@ -573,7 +665,7 @@ class Sentinel1Image(Nansat):
         return q_all
 
     def get_range_quality_metric(self, polarization='HV', **kwargs):
-        """ Compute sigma0 with four methods (ESA, SHIFTED, NERSC, APG), compute RQM for each sigma0 """
+        """ Compute sigma0 with four methods (ESA, SHIFTED, NERSC, TG), compute RQM for each sigma0 """
         line, pixel, noise = self.get_noise_range_vectors(polarization)
         cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
 
@@ -586,15 +678,15 @@ class Sentinel1Image(Nansat):
         noise_shifted = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
         nesz_shifted = self.calibrate_noise_vectors(noise_shifted, cal_s0, scall)
         nesz_corrected = self.get_corrected_noise_vectors(polarization, line, pixel, nesz_shifted)
-        noise_apg = self.get_noise_apg_vectors(polarization, line, pixel)
-        nesz_apg = self.calibrate_noise_vectors(noise_apg, cal_s0, scall)
+        noise_tg = self.get_noise_tg_vectors(polarization, line, pixel)
+        nesz_tg = self.calibrate_noise_vectors(noise_tg, cal_s0, scall)
         sigma0 = self.get_raw_sigma0_vectors(polarization, line, pixel, cal_s0)
         s0_esa   = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_esa)]
         s0_shift = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_shifted)]
         s0_nersc = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_corrected)]
-        s0_apg   = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_apg)]
-        q = [self.compute_rqm(s0, polarization, line, pixel) for s0 in [s0_esa, s0_shift, s0_nersc, s0_apg]]
-        alg_names = ['ESA', 'SHIFT', 'NERSC', 'APG']
+        s0_tg   = [s0 - n0 for (s0,n0) in zip(sigma0, nesz_tg)]
+        q = [self.compute_rqm(s0, polarization, line, pixel) for s0 in [s0_esa, s0_shift, s0_nersc, s0_tg]]
+        alg_names = ['ESA', 'SHIFT', 'NERSC', 'TG']
         var_names = ['RQM', 'AVG1', 'AVG2', 'STD1', 'STD2']
         q_all = {'IPF': self.IPFversion}
         for swid in self.swath_ids[:-1]:
@@ -608,7 +700,6 @@ class Sentinel1Image(Nansat):
     def experiment_get_data(self, polarization, average_lines, zoom_step):
         """ Prepare data for  noiseScaling and powerBalancing experiments """
         crop = {'IW':400, 'EW':200}[self.obsMode]
-        swathBounds = self.import_swathBounds(polarization)
         line, pixel0, noise0 = self.get_noise_range_vectors(polarization)
         cal_s00 = self.get_calibration_vectors(polarization, line, pixel0)
         # zoom:
@@ -623,7 +714,7 @@ class Sentinel1Image(Nansat):
         sigma0 = self.get_raw_sigma0_vectors_from_full_size(
             polarization, line, pixel, sigma0_fs, average_lines=average_lines)
 
-        return line, pixel, sigma0, nesz, crop, swathBounds
+        return line, pixel, sigma0, nesz, crop, self.swath_bounds[polarization]
 
     def experiment_noiseScaling(self, polarization, average_lines=777, zoom_step=2):
         """ Compute noise scaling coefficients for each range noise line and save as NPZ """
@@ -796,25 +887,16 @@ class Sentinel1Image(Nansat):
                 z_fs[fal:lal+1, frs:lrs+1] = z_arr_fs
         return z_fs
 
-    def get_calibration_full_size(self, polarization, power=1):
-        """ Get calibration constant on full size matrix """
-        calibrationVector = self.import_calibrationVector(polarization)
-        line = np.array(calibrationVector['line'])
-        pixel = np.array(calibrationVector['pixel'])
-        s0 = np.array(calibrationVector['sigmaNought'])
-        return self.interp_nrv_full_size(s0, line, pixel, polarization, power=power)
-
     def get_corrected_nesz_full_size(self, polarization, nesz):
         """ Get corrected NESZ on full size matrix """
         nesz_corrected = np.array(nesz)
-        swathBounds = self.import_swathBounds(polarization)
         ns, pb = self.import_denoisingCoefficients(polarization)[:2]
         for swid in self.swath_ids:
             swath_name = f'{self.obsMode}{swid}'
             # skip correction id NS/PB coeffs are not available (e.g. HH or VV)
             if swath_name not in ns:
                 continue
-            swathBound = swathBounds[swath_name]
+            swathBound = self.swath_bounds[polarization][swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
                 swathBound['lastAzimuthLine'],
@@ -826,13 +908,17 @@ class Sentinel1Image(Nansat):
                 nesz_corrected[fal:lal+1, frs:lrs+1] += pb[swath_name]
         return nesz_corrected
 
-    def get_raw_sigma0_full_size(self, polarization, min_dn=0):
+    def get_raw_sigma0_full_size(self, pol, min_dn=0):
         """ Read DN from input GeoTiff file and calibrate """
-        src_filename = self.bands()[self.get_band_number(f'DN_{polarization}')]['SourceFilename']
+        src_filename = self.bands()[self.get_band_number(f'DN_{pol}')]['SourceFilename']
         ds = gdal.Open(src_filename)
         dn = ds.ReadAsArray()
 
-        sigma0_fs = dn.astype(float)**2 / self.get_calibration_full_size(polarization, power=2)
+        sigma0_fs = dn.astype(float)**2 / self.interp_nrv_full_size(
+            self.calibration[pol]['sigmaNought'],
+            self.calibration[pol]['line'],
+            self.calibration[pol]['pixel'],
+            pol, power=2)
         sigma0_fs[dn <= min_dn] = np.nan
         return sigma0_fs
 
@@ -853,15 +939,15 @@ class Sentinel1Image(Nansat):
         tree.write(os.path.join(output_path, os.path.basename(crosspol_noise_file)))
         return crosspol_noise_file
 
-    def get_noise_apg_vectors(self, polarization, line, pixel):
+    def get_noise_tg_vectors(self, polarization, line, pixel):
         noise = [np.zeros_like(i) for i in pixel]
-        scales, offsets = self.get_apg_scales_offsets()
-        apg = self.get_apg_vectors(polarization, line, pixel)
+        scales, offsets = self.get_tg_scales_offsets()
+        gtot = self.get_tg_vectors(polarization, line, pixel)
         swath_ids = self.get_swath_id_vectors(polarization, line, pixel)
-        for i in range(len(apg)):
+        for i in range(len(gtot)):
             for j in range(1,6):
                 gpi = swath_ids[i] == j
-                noise[i][gpi] = offsets[j-1] + apg[i][gpi] * scales[j-1]
+                noise[i][gpi] = offsets[j-1] + gtot[i][gpi] * scales[j-1]
         return noise
 
     def get_nesz_full_size(self, polarization, algorithm):
@@ -870,9 +956,9 @@ class Sentinel1Image(Nansat):
         if algorithm == 'NERSC':
             # NERSC correction of noise shift in range direction
             noise = self.get_shifted_noise_vectors(polarization, line, pixel, noise)
-        elif algorithm == 'NERSC_APG':
-            # APG-based noise vectors
-            noise = self.get_noise_apg_vectors(polarization, line, pixel)
+        elif algorithm == 'NERSC_TG':
+            # Total Gain - based noise vectors
+            noise = self.get_noise_tg_vectors(polarization, line, pixel)
         # noise calibration
         cal_s0 = self.get_calibration_vectors(polarization, line, pixel)
         nesz = [n / c**2 for (n,c) in zip(noise, cal_s0)]
@@ -957,52 +1043,6 @@ class Sentinel1Image(Nansat):
                             get_DOM_nodeValue(iList,[k],'int'))
         return noiseRangeVector, noiseAzimuthVector
 
-    def import_calibrationVector(self, polarization):
-        ''' Import calibration vectors from calibration annotation XML DOM '''
-        calibrationVectorList = self.calibrationXML[polarization].getElementsByTagName(
-            'calibrationVector')
-        calibrationVector = { 'azimuthTime':[],
-                              'line':[],
-                              'pixel':[],
-                              'sigmaNought':[],
-                              'betaNought':[],
-                              'gamma':[],
-                              'dn':[] }
-        for iList in calibrationVectorList:
-            for k in calibrationVector.keys():
-                if k=='azimuthTime':
-                    calibrationVector[k].append(
-                        datetime.strptime(get_DOM_nodeValue(iList,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
-                elif k in ['line', 'pixel']:
-                    calibrationVector[k].append(
-                        get_DOM_nodeValue(iList,[k],'int'))
-                else:
-                    calibrationVector[k].append(
-                        get_DOM_nodeValue(iList,[k],'float'))
-        return calibrationVector
-
-    def import_swathBounds(self, polarization):
-        ''' Import swath bounds information from annotation XML DOM '''
-        swathMergeList = self.annotationXML[polarization].getElementsByTagName('swathMerge')
-        swathBounds = { '%s%s' % (self.obsMode, li):
-                            { 'azimuthTime':[],
-                              'firstAzimuthLine':[],
-                              'firstRangeSample':[],
-                              'lastAzimuthLine':[],
-                              'lastRangeSample':[] }
-                        for li in self.swath_ids }
-        for iList1 in swathMergeList:
-            swath = get_DOM_nodeValue(iList1,['swath'])
-            swathBoundsList = iList1.getElementsByTagName('swathBounds')
-            for iList2 in swathBoundsList:
-                for k in swathBounds[swath].keys():
-                    if k=='azimuthTime':
-                        swathBounds[swath][k].append(
-                            datetime.strptime(get_DOM_nodeValue(iList2,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
-                    else:
-                        swathBounds[swath][k].append(get_DOM_nodeValue(iList2,[k],'int'))
-        return swathBounds
-
     def import_elevationAntennaPattern(self, polarization):
         ''' Import elevation antenna pattern from auxiliary calibration XML DOM '''
         calParamsList = self.auxiliaryCalibrationXML.getElementsByTagName('calibrationParams')
@@ -1028,32 +1068,6 @@ class Sentinel1Image(Nansat):
                     elif k in ['absoluteCalibrationConstant', 'noiseCalibrationFactor']:
                         elevationAntennaPattern[swath][k] = get_DOM_nodeValue(iList,[k],'float')
         return elevationAntennaPattern
-
-    def import_geolocationGridPoint(self, polarization):
-        ''' Import geolocation grid point from annotation XML DOM '''
-        geolocationGridPointList = self.annotationXML[polarization].getElementsByTagName(
-            'geolocationGridPoint')
-        geolocationGridPoint = { 'azimuthTime':[],
-                                 'slantRangeTime':[],
-                                 'line':[],
-                                 'pixel':[],
-                                 'latitude':[],
-                                 'longitude':[],
-                                 'height':[],
-                                 'incidenceAngle':[],
-                                 'elevationAngle':[] }
-        for iList in geolocationGridPointList:
-            for k in geolocationGridPoint.keys():
-                if k=='azimuthTime':
-                    geolocationGridPoint[k].append(
-                        datetime.strptime(get_DOM_nodeValue(iList,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
-                elif k in ['line', 'pixel']:
-                    geolocationGridPoint[k].append(
-                        get_DOM_nodeValue(iList,[k],'int'))
-                else:
-                    geolocationGridPoint[k].append(
-                        get_DOM_nodeValue(iList,[k],'float'))
-        return geolocationGridPoint
 
     def import_antennaPattern(self, polarization):
         ''' Import antenna pattern from annotation XML DOM '''
@@ -1199,7 +1213,7 @@ class Sentinel1Image(Nansat):
         return ( noiseScalingParameters, powerBalancingParameters, extraScalingParameters,
                  noiseVarianceParameters )
 
-    def remove_texture_noise(self, polarization, window=3, weight=0.15, s0_min=0, remove_negative=True, algorithm='NERSC', min_dn=0, **kwargs):
+    def remove_texture_noise(self, polarization, window=3, weight=0.1, s0_min=0, remove_negative=True, algorithm='NERSC', min_dn=0, **kwargs):
         """ Thermal noise removal followed by textural noise compensation using Method2
 
         Method2 is implemented as a weighted average of sigma0 and sigma0 smoothed with
@@ -1238,7 +1252,7 @@ class Sentinel1Image(Nansat):
             snr = sigma0g / nesz
             sigma0o = (weight * sigma0g + snr * sigma0) / (weight + snr) + s0_offset
 
-        if remove_negative:
+        if remove_negative and np.nanmin(sigma0o) < 0:
             sigma0o = fill_gaps(sigma0o, sigma0o <= s0_min)
 
         return sigma0o
@@ -1246,9 +1260,8 @@ class Sentinel1Image(Nansat):
     def subswathIndexMap(self, polarization):
         ''' Convert subswath indices into full grid pixels '''
         subswathIndexMap = np.zeros(self.shape(), dtype=np.uint8)
-        swathBounds = self.import_swathBounds(polarization)
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
-            swathBound = swathBounds['%s%s' % (self.obsMode, iSW)]
+            swathBound = self.swath_bounds[polarization]['%s%s' % (self.obsMode, iSW)]
             zipped = zip(swathBound['firstAzimuthLine'],
                          swathBound['firstRangeSample'],
                          swathBound['lastAzimuthLine'],
@@ -1285,7 +1298,7 @@ class Sentinel1Image(Nansat):
     
     def subswathCenterSampleIndex(self, polarization):
         ''' Range center pixel indices along azimuth for each subswath '''
-        swathBounds = self.import_swathBounds(polarization)
+        swathBounds = self.swath_bounds[polarization]
         subswathCenterSampleIndex = {}
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             subswathID = '%s%s' % (self.obsMode, iSW)
@@ -1297,20 +1310,14 @@ class Sentinel1Image(Nansat):
                 np.sum(midPixelIndices * numberOfLines) / np.sum(numberOfLines) ))
         return subswathCenterSampleIndex
     
-    def geolocationGridPointInterpolator(self, polarization, itemName):
+    def geolocationGridPointInterpolator(self, pol, itemName):
         ''' Generate interpolator for items in geolocation grid point list '''
-        geolocationGridPoint = self.import_geolocationGridPoint(polarization)
-        if itemName not in geolocationGridPoint.keys():
-            raise ValueError('%s is not in the geolocationGridPoint list.' % itemName)
-        x = np.unique(geolocationGridPoint['pixel'])
-        y = np.unique(geolocationGridPoint['line'])
-        if itemName=='azimuthTime':
-            z = [ (t-self.time_coverage_center).total_seconds()
-                  for t in geolocationGridPoint['azimuthTime'] ]
-            z = np.reshape(z,(len(y),len(x)))
+        if itemName == 'azimuthTime':
+            z = self.geolocation_relative_azimuth_time[pol]
         else:
-            z = np.reshape(geolocationGridPoint[itemName],(len(y),len(x)))
-        interpolator = RectBivariateSpline(y, x, z)
+            z = self.geolocation[pol][itemName]
+        interpolator = RectBivariateSpline(
+            self.geolocation[pol]['line'], self.geolocation[pol]['pixel'], z)
         return interpolator
     
     def azimuthFmRateAtGivenTime(self, polarization, relativeAzimuthTime, slantRangeTime):
@@ -1337,13 +1344,13 @@ class Sentinel1Image(Nansat):
     
     def import_azimuthFmRate(self, polarization):
         ''' Import azimuth frequency modulation rate from annotation XML DOM '''
-        soup = BeautifulSoup(self.annotationXML[polarization].toxml(), "lxml")
+        soup = BeautifulSoup(self.annotationXML[polarization].toxml(), features="xml")
         azimuthFmRate = defaultdict(list)
-        for afmr in soup.find_all('azimuthfmrate'):
-            azimuthFmRate['azimuthTime'].append(datetime.strptime(afmr.azimuthtime.text, '%Y-%m-%dT%H:%M:%S.%f'))
+        for afmr in soup.find_all('azimuthFmRate'):
+            azimuthFmRate['azimuthTime'].append(datetime.strptime(afmr.azimuthTime.text, '%Y-%m-%dT%H:%M:%S.%f'))
             azimuthFmRate['t0'].append(float(afmr.t0.text))
-            if 'azimuthfmratepolynomial' in afmr.decode():
-                afmrp = list(map(float,afmr.azimuthfmratepolynomial.text.split(' ')))
+            if 'azimuthFmRatePolynomial' in afmr.decode():
+                afmrp = list(map(float, afmr.azimuthFmRatePolynomial.text.split(' ')))
             elif 'c0' in afmr.decode() and 'c1' in afmr.decode() and 'c2' in afmr.decode():
                 afmrp = [float(afmr.c0.text), float(afmr.c1.text), float(afmr.c2.text)]
             azimuthFmRate['azimuthFmRatePolynomial'].append(afmrp)
