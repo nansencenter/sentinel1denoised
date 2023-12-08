@@ -8,7 +8,7 @@ import shutil
 import xml.etree.ElementTree as ET
 from xml.dom.minidom import parse, parseString
 import zipfile
-from functools import cached_property
+from functools import cached_property, cache
 
 from nansat import Nansat
 import numpy as np
@@ -78,8 +78,8 @@ class Sentinel1Image(Nansat):
                             [zf.read(fn) for fn in annotationFiles if polarization.lower() in fn][0])
                     self.calibrationXML[polarization] = parseString(
                         [zf.read(fn) for fn in calibrationFiles if polarization.lower() in fn][0])
-                    self.noiseXML[polarization] = parseString(
-                        [zf.read(fn) for fn in noiseFiles if polarization.lower() in fn][0])
+                    self.noiseXML[polarization] = BeautifulSoup(
+                        [zf.read(fn) for fn in noiseFiles if polarization.lower() in fn][0], features="xml")
                 self.manifestXML = parseString(zf.read([fn for fn in zf.namelist()
                                                         if 'manifest.safe' in fn][0]))
         else:
@@ -104,7 +104,7 @@ class Sentinel1Image(Nansat):
                 for fn in noiseFiles:
                     if polarization.lower() in fn:
                         with open(fn) as ff:
-                            self.noiseXML[polarization] = parseString(ff.read())
+                            self.noiseXML[polarization] = BeautifulSoup(ff.read(), features="xml")
 
             with open(glob.glob(self.filename+'/manifest.safe')[0]) as ff:
                 self.manifestXML = parseString(ff.read())
@@ -220,6 +220,47 @@ class Sentinel1Image(Nansat):
                 calibration[pol][key] = np.array([list(map(float, p.split())) for p in calibration[pol][key]])
         return calibration
 
+    @cache
+    def noise_range(self, pol):
+        if self.IPFversion < 2.9:
+            noiseRangeVectorName = 'noiseVector'
+            noiseLutName = 'noiseLut'
+        else:
+            noiseRangeVectorName = 'noiseRangeVector'
+            noiseLutName = 'noiseRangeLut'
+        noise_range = defaultdict(list)
+        #soup = BeautifulSoup(self.noiseXML[pol].toxml(), features="xml")
+        for noiseVector in self.noiseXML[pol].find_all(noiseRangeVectorName):
+            noise_range['azimuthTime'].append(parse_azimuth_time(noiseVector.azimuthTime.text))
+            noise_range['line'].append(int(noiseVector.line.text))
+            noise_range['pixel'].append(np.array([int(i) for i in noiseVector.pixel.text.split()]))
+            noise_range['noise'].append(np.array([float(i) for i in noiseVector.find(noiseLutName).text.split()]))
+        noise_range['line'] = np.array(noise_range['line'])
+        return noise_range
+
+    @cache
+    def noise_azimuth(self, pol):
+        noise_azimuth = {f'{self.obsMode}{swid}':defaultdict(list) for swid in self.swath_ids}
+        if self.IPFversion < 2.9:
+            for swid in self.swath_ids:
+                noise_azimuth[f'{self.obsMode}{swid}'] = dict(
+                    firstAzimuthLine = [0],
+                    firstRangeSample = [0],
+                    lastAzimuthLine = [self.shape()[0]-1],
+                    lastRangeSample = [self.shape()[1]-1],
+                    line = [np.array([0, self.shape()[0]-1])],
+                    noise = [np.array([1.0, 1.0])])
+        else:
+            int_names = ['firstAzimuthLine', 'firstRangeSample', 'lastAzimuthLine', 'lastRangeSample']
+            #soup = BeautifulSoup(self.noiseXML[pol].toxml(), features="xml")
+            for noiseAzimuthVector in self.noiseXML[pol].find_all('noiseAzimuthVector'):
+                swath = noiseAzimuthVector.swath.text
+                for int_name in int_names:
+                    noise_azimuth[swath][int_name].append(int(noiseAzimuthVector.find(int_name).text))
+                noise_azimuth[swath]['line'].append(np.array([int(i) for i in noiseAzimuthVector.line.text.split()]))
+                noise_azimuth[swath]['noise'].append(np.array([float(i) for i in noiseAzimuthVector.noiseAzimuthLut.text.split()]))
+        return noise_azimuth
+
     def set_aux_data_dir(self):
         """ Set directory where aux calibration data is stored """
         self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.path.expanduser('~')),
@@ -262,22 +303,9 @@ class Sentinel1Image(Nansat):
             # the best found AUX-CAL file is copied to the filename from manifest
             shutil.copytree(download_file.rstrip('.zip'), output_dir)
 
-    def get_noise_range_vectors(self, polarization):
+    def get_noise_range_vectors(self, pol):
         """ Get range noise from XML files and return noise, pixels and lines for non-zero elems"""
-        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
-        line = np.array(noiseRangeVector['line'])
-        pixel = []
-        noise = []
-
-        for pix, n in zip(noiseRangeVector['pixel'], noiseRangeVector['noiseRangeLut']):
-            n = np.array(n)
-            noise.append(n)
-            pixel.append(np.array(pix))
-            
-        if self.IPFversion <= 2.43:
-            noise = [np.zeros_like(i) for i in noise]
-
-        return line, pixel, noise
+        return self.noise_range(pol)['line'], self.noise_range(pol)['pixel'], self.noise_range(pol)['noise']
     
     def get_swath_id_vectors(self, polarization, line, pixel):
         swath_indices = [np.zeros(p.shape, int) for p in pixel]
@@ -320,10 +348,10 @@ class Sentinel1Image(Nansat):
 
         return eap_vectors, rsl_vectors
 
-    def get_pg_product(self, polarization, pg_name='pgProductAmplitude'):
-        noiseRangeVector, _ = self.import_noiseVector(polarization)
-        azimuth_time = [(t - self.time_coverage_center).total_seconds() for t in noiseRangeVector['azimuthTime']]
-        annotation_soup = BeautifulSoup(self.annotationXML[polarization].toxml(), features="xml")
+    def get_pg_product(self, pol, pg_name='pgProductAmplitude'):
+        azimuth_time = [(t - self.time_coverage_center).total_seconds()
+                        for t in self.noise_range(pol)['azimuthTime']]
+        annotation_soup = BeautifulSoup(self.annotationXML[pol].toxml(), features="xml")
         pg = defaultdict(dict)
         for pgpa in annotation_soup.find_all(pg_name):
             pg[pgpa.parent.parent.parent.swath.text][pgpa.parent.azimuthTime.text] = float(pgpa.text)
@@ -980,69 +1008,6 @@ class Sentinel1Image(Nansat):
             sigma0 = fill_gaps(sigma0, sigma0 <= 0)
         return sigma0
 
-    def import_noiseVector(self, polarization):
-        ''' Import noise vectors from noise annotation XML DOM '''
-        noiseRangeVector = { 'azimuthTime':[],
-                             'line':[],
-                             'pixel':[],
-                             'noiseRangeLut':[] }
-        noiseAzimuthVector = { '%s%s' % (self.obsMode, li):
-                                   { 'firstAzimuthLine':[],
-                                     'firstRangeSample':[],
-                                     'lastAzimuthLine':[],
-                                     'lastRangeSample':[],
-                                     'line':[],
-                                     'noiseAzimuthLut':[] }
-                               for li in self.swath_ids }
-        # ESA changed the noise vector structure from IPFv 2.9 to include azimuth variation
-        if self.IPFversion < 2.9:
-            noiseVectorList = self.noiseXML[polarization].getElementsByTagName('noiseVector')
-            for iList in noiseVectorList:
-                noiseRangeVector['azimuthTime'].append(
-                    datetime.strptime(get_DOM_nodeValue(iList,['azimuthTime']),
-                                      '%Y-%m-%dT%H:%M:%S.%f'))
-                noiseRangeVector['line'].append(
-                    get_DOM_nodeValue(iList,['line'],'int'))
-                noiseRangeVector['pixel'].append(
-                    get_DOM_nodeValue(iList,['pixel'],'int'))
-                # To keep consistency, noiseLut is stored as noiseRangeLut
-                noiseRangeVector['noiseRangeLut'].append(
-                    get_DOM_nodeValue(iList,['noiseLut'],'float'))
-            for iSW in self.swath_ids:
-                swath = self.obsMode + str(iSW)
-                noiseAzimuthVector[swath]['firstAzimuthLine'].append(0)
-                noiseAzimuthVector[swath]['firstRangeSample'].append(0)
-                noiseAzimuthVector[swath]['lastAzimuthLine'].append(self.shape()[0]-1)
-                noiseAzimuthVector[swath]['lastRangeSample'].append(self.shape()[1]-1)
-                noiseAzimuthVector[swath]['line'].append([0, self.shape()[0]-1])
-                # noiseAzimuthLut is filled with a vector of ones
-                noiseAzimuthVector[swath]['noiseAzimuthLut'].append([1.0, 1.0])
-        elif self.IPFversion >= 2.9:
-            noiseRangeVectorList = self.noiseXML[polarization].getElementsByTagName(
-                'noiseRangeVector')
-            for iList in noiseRangeVectorList:
-                noiseRangeVector['azimuthTime'].append(
-                    datetime.strptime(get_DOM_nodeValue(iList,['azimuthTime']),
-                                      '%Y-%m-%dT%H:%M:%S.%f'))
-                noiseRangeVector['line'].append(
-                    get_DOM_nodeValue(iList,['line'],'int'))
-                noiseRangeVector['pixel'].append(
-                    get_DOM_nodeValue(iList,['pixel'],'int'))
-                noiseRangeVector['noiseRangeLut'].append(
-                    get_DOM_nodeValue(iList,['noiseRangeLut'],'float'))
-            noiseAzimuthVectorList = self.noiseXML[polarization].getElementsByTagName(
-                'noiseAzimuthVector')
-            for iList in noiseAzimuthVectorList:
-                swath = get_DOM_nodeValue(iList,['swath'],'str')
-                for k in noiseAzimuthVector[swath].keys():
-                    if k=='noiseAzimuthLut':
-                        noiseAzimuthVector[swath][k].append(
-                            get_DOM_nodeValue(iList,[k],'float'))
-                    else:
-                        noiseAzimuthVector[swath][k].append(
-                            get_DOM_nodeValue(iList,[k],'int'))
-        return noiseRangeVector, noiseAzimuthVector
-
     def import_elevationAntennaPattern(self, polarization):
         ''' Import elevation antenna pattern from auxiliary calibration XML DOM '''
         calParamsList = self.auxiliaryCalibrationXML.getElementsByTagName('calibrationParams')
@@ -1443,28 +1408,28 @@ class Sentinel1Image(Nansat):
         scallopingGain = 1. / 10**(burstAAEP/10.)
         return scallopingGain
 
-    def get_noise_azimuth_vectors(self, polarization, line, pixel):
+    def get_noise_azimuth_vectors(self, pol, line, pixel):
         """ Interpolate scalloping noise from XML files to input line/pixel coords """
         scall = [np.zeros(p.size) for p in pixel]
         if self.IPFversion < 2.9:
-            swath_idvs = self.get_swath_id_vectors(polarization, line, pixel)
+            swath_idvs = self.get_swath_id_vectors(pol, line, pixel)
             for i, l in enumerate(line):
                 for j in range(1,6):
                     gpi = swath_idvs[i] == j
                     scall[i][gpi] = self.scallopingGain[f'EW{j}'][l]            
             return scall
 
-        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
+        noiseAzimuthVector = self.noise_azimuth(pol)
         for iSW in self.swath_ids:
-            subswathID = '%s%s' % (self.obsMode, iSW)
-            numberOfBlocks = len(noiseAzimuthVector[subswathID]['firstAzimuthLine'])
+            swath = f'{self.obsMode}{iSW}'
+            numberOfBlocks = len(noiseAzimuthVector[swath]['firstAzimuthLine'])
             for iBlk in range(numberOfBlocks):
-                frs = noiseAzimuthVector[subswathID]['firstRangeSample'][iBlk]
-                lrs = noiseAzimuthVector[subswathID]['lastRangeSample'][iBlk]
-                fal = noiseAzimuthVector[subswathID]['firstAzimuthLine'][iBlk]
-                lal = noiseAzimuthVector[subswathID]['lastAzimuthLine'][iBlk]
-                y = np.array(noiseAzimuthVector[subswathID]['line'][iBlk])
-                z = np.array(noiseAzimuthVector[subswathID]['noiseAzimuthLut'][iBlk])
+                frs = noiseAzimuthVector[swath]['firstRangeSample'][iBlk]
+                lrs = noiseAzimuthVector[swath]['lastRangeSample'][iBlk]
+                fal = noiseAzimuthVector[swath]['firstAzimuthLine'][iBlk]
+                lal = noiseAzimuthVector[swath]['lastAzimuthLine'][iBlk]
+                y = np.array(noiseAzimuthVector[swath]['line'][iBlk])
+                z = np.array(noiseAzimuthVector[swath]['noise'][iBlk])
                 if y.size > 1:
                     nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
                 else:
@@ -1476,21 +1441,21 @@ class Sentinel1Image(Nansat):
                     scall[line_i][pixel_gpi] = nav_interp(line[line_i])
         return scall
 
-    def get_scalloping_full_size(self, polarization):
+    def get_scalloping_full_size(self, pol):
         """ Interpolate noise azimuth vector to full resolution for all blocks """
         scall_fs = np.zeros(self.shape())
         if self.IPFversion < 2.9:
-            subswathIndexMap = self.subswathIndexMap(polarization)
+            subswathIndexMap = self.subswathIndexMap(pol)
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
                 subswathID = '%s%s' % (self.obsMode, iSW)
                 scallopingGain = self.scallopingGain[subswathID]
                 # assign computed scalloping gain into each subswath
                 valid = (subswathIndexMap==iSW)
                 scall_fs[valid] = (
-                    scallopingGain[:,np.newaxis] * np.ones((1,self.shape()[1])))[valid]
+                    scallopingGain[:, np.newaxis] * np.ones((1,self.shape()[1])))[valid]
             return scall_fs
             
-        noiseRangeVector, noiseAzimuthVector = self.import_noiseVector(polarization)
+        noiseAzimuthVector = self.noise_azimuth(pol)
         swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
         for swath_name in swath_names:
             nav = noiseAzimuthVector[swath_name]
@@ -1500,10 +1465,10 @@ class Sentinel1Image(Nansat):
                 nav['firstRangeSample'],
                 nav['lastRangeSample'],
                 nav['line'],
-                nav['noiseAzimuthLut'],
+                nav['noise'],
             )
             for fal, lal, frs, lrs, y, z in zipped:
-                if isinstance(y, list):
+                if isinstance(y, (list, np.ndarray)):
                     nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
                 else:
                     nav_interp = lambda x: z
@@ -1511,4 +1476,4 @@ class Sentinel1Image(Nansat):
                 z_vec_fr = nav_interp(lin_vec_fr)
                 z_arr = np.repeat([z_vec_fr], (lrs-frs+1), axis=0).T
                 scall_fs[fal:lal+1, frs:lrs+1] = z_arr
-        return scall_fs    
+        return scall_fs
