@@ -73,9 +73,9 @@ class Sentinel1Image(Nansat):
                 noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
 
                 for pol in [txPol + 'H', txPol + 'V']:
-                    # TODO: replace self.annotationXML[pol].toxml() with raw XML
-                    self.annotationXML[pol] = parseString(
-                            [zf.read(fn) for fn in annotationFiles if pol.lower() in fn][0])
+                    self.annotationXML[pol] = BeautifulSoup(
+                            [zf.read(fn) for fn in annotationFiles if pol.lower() in fn][0],
+                            features="xml")
                     self.calibrationXML[pol] = parseString(
                         [zf.read(fn) for fn in calibrationFiles if pol.lower() in fn][0])
                     self.noiseXML[pol] = BeautifulSoup(
@@ -94,7 +94,7 @@ class Sentinel1Image(Nansat):
                 for fn in annotationFiles:
                     if pol.lower() in fn:
                         with open(fn) as ff:
-                            self.annotationXML[pol] = parseString(ff.read())
+                            self.annotationXML[pol] = BeautifulSoup(ff.read(), features="xml")
 
                 for fn in calibrationFiles:
                     if pol.lower() in fn:
@@ -153,9 +153,8 @@ class Sentinel1Image(Nansat):
 
         swath_bounds = {}
         for pol in self.pols:
-            soup = BeautifulSoup(self.annotationXML[pol].toxml(), features="xml")
             swath_bounds[pol] = {}
-            for swathMerge in soup.find_all('swathMerge'):
+            for swathMerge in self.annotationXML[pol].find_all('swathMerge'):
                 swath_bounds[pol][swathMerge.swath.text] = defaultdict(list)
                 for swathBounds in swathMerge.find_all('swathBounds'):
                     for name in names:
@@ -178,9 +177,8 @@ class Sentinel1Image(Nansat):
         }
         geolocation = {}
         for pol in self.pols:
-            soup = BeautifulSoup(self.annotationXML[pol].toxml(), features="xml")
             geolocation[pol] = defaultdict(list)
-            for p in soup.find_all('geolocationGridPoint'):
+            for p in self.annotationXML[pol].find_all('geolocationGridPoint'):
                 for c in p:
                     if c.name:
                         geolocation[pol][c.name].append(geolocation_keys[c.name](c.text))
@@ -353,9 +351,8 @@ class Sentinel1Image(Nansat):
     def get_pg_product(self, pol, pg_name='pgProductAmplitude'):
         azimuth_time = [(t - self.time_coverage_center).total_seconds()
                         for t in self.noise_range(pol)['azimuthTime']]
-        annotation_soup = BeautifulSoup(self.annotationXML[pol].toxml(), features="xml")
         pg = defaultdict(dict)
-        for pgpa in annotation_soup.find_all(pg_name):
+        for pgpa in self.annotationXML[pol].find_all(pg_name):
             pg[pgpa.parent.parent.parent.swath.text][pgpa.parent.azimuthTime.text] = float(pgpa.text)
 
         pg_swaths = {}
@@ -494,7 +491,7 @@ class Sentinel1Image(Nansat):
     
     def get_boresight_angle_interpolator(self, pol):
         """ Prepare interpolator for boresight angles. It computes BA for input x,y coordinates. """
-        antennaPattern = self.import_antennaPattern(pol)
+        antennaPattern = self.antenna_pattern(pol)
         relativeAzimuthTime = []
         for iSW in self.swath_ids:
             subswathID = '%s%s' % (self.obsMode, iSW)
@@ -521,8 +518,7 @@ class Sentinel1Image(Nansat):
         rsl_power : float power for RSL = (2 * Rref / time / C)^rsl_power
 
         """
-        referenceRange = float(self.annotationXML[pol].getElementsByTagName(
-                    'referenceRange')[0].childNodes[0].nodeValue)
+        referenceRange = float(self.annotationXML[pol].find('referenceRange').text)
         rangeSpreadingLoss = (referenceRange / self.geolocation[pol]['slantRangeTime'] / SPEED_OF_LIGHT * 2)**rsl_power
         rsp_interpolator = RectBivariateSpline(
             self.geolocation[pol]['line'], self.geolocation[pol]['pixel'], rangeSpreadingLoss)
@@ -1052,45 +1048,39 @@ class Sentinel1Image(Nansat):
                         elevationAntennaPattern[swath][k] = get_DOM_nodeValue(iList,[k],'float')
         return elevationAntennaPattern
 
-    def import_antennaPattern(self, pol):
-        ''' Import antenna pattern from annotation XML DOM '''
-        swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
-        antennaPatternList = self.annotationXML[pol].getElementsByTagName('antennaPattern')
-        antennaPatternList = antennaPatternList[1:]
-        keys = ['azimuthTime', 'slantRangeTime', 'elevationAngle', 'elevationPattern', 'incidenceAngle', 'terrainHeight', 'roll']
-        antennaPattern = {swath_name: {key: [] for key in keys} for swath_name in swath_names}
-        compute_roll = False
-        for iList in antennaPatternList:
-            swath = get_DOM_nodeValue(iList, ['swath'])
-            for k in antennaPattern[swath].keys():
-                if k=='azimuthTime':
-                    antennaPattern[swath][k].append(
-                        datetime.strptime(get_DOM_nodeValue(iList,[k]),'%Y-%m-%dT%H:%M:%S.%f'))
-                elif k == 'roll' and len(iList.getElementsByTagName('roll')) == 0:
-                    antennaPattern[swath][k].append(None)
-                    compute_roll = True
-                else:
-                    antennaPattern[swath][k].append(get_DOM_nodeValue(iList,[k],'float'))
+    @cache
+    def antenna_pattern(self, pol):
+        list_keys = ['slantRangeTime', 'elevationAngle', 'elevationPattern', 'incidenceAngle']
+        antenna_pattern = {}
+        antennaPatternList = self.annotationXML[pol].find('antennaPatternList')
+        compute_roll = True
+        for antennaPattern in antennaPatternList.find_all('antennaPattern'):
+            swath = antennaPattern.swath.text
+            if swath not in antenna_pattern:
+                antenna_pattern[swath] = defaultdict(list)
+            antenna_pattern[swath]['azimuthTime'].append(parse_azimuth_time(antennaPattern.azimuthTime.text))
+            for list_key in list_keys:
+                antenna_pattern[swath][list_key].append(np.array([float(i) for i in antennaPattern.find(list_key).text.split()]))
+            antenna_pattern[swath]['terrainHeight'].append(float(antennaPattern.terrainHeight.text))
+            if antennaPattern.find('roll'):
+                antenna_pattern[swath]['roll'].append(float(antennaPattern.roll.text))
+                compute_roll = False
         if compute_roll:
-            for swath_name in swath_names:
-                antennaPattern[swath_name]['roll'] = self.compute_roll(pol, antennaPattern[swath_name])
-        return antennaPattern
+            for swath in antenna_pattern:
+                antenna_pattern[swath]['roll'] = self.compute_roll(pol, antenna_pattern[swath])
+        return antenna_pattern
 
+    @cache
     def import_orbit(self, pol):
         ''' Import orbit information from annotation XML DOM '''
-        orbitList = self.annotationXML[pol].getElementsByTagName('orbit')
         orbit = { 'time':[],
                   'position':{'x':[], 'y':[], 'z':[]},
                   'velocity':{'x':[], 'y':[], 'z':[]} }
-        for iList in orbitList:
-            orbit['time'].append(
-                datetime.strptime(get_DOM_nodeValue(iList,['time']), '%Y-%m-%dT%H:%M:%S.%f'))
-            for k in orbit['position'].keys():
-                orbit['position'][k].append(
-                    get_DOM_nodeValue(iList,['position',k],'float'))
-            for k in orbit['velocity'].keys():
-                orbit['velocity'][k].append(
-                    get_DOM_nodeValue(iList,['velocity',k],'float'))
+        for o in self.annotationXML[pol].find('orbitList').find_all('orbit'):
+            orbit['time'].append(parse_azimuth_time(o.time.text))
+            for name1 in ['position', 'velocity']:
+                for name2 in ['x', 'y', 'z']:
+                    orbit[name1][name2].append(float(o.find(name1).find(name2).text))
         return orbit
 
     def orbitAtGivenTime(self, pol, relativeAzimuthTime):
@@ -1327,9 +1317,8 @@ class Sentinel1Image(Nansat):
     
     def import_azimuthFmRate(self, pol):
         ''' Import azimuth frequency modulation rate from annotation XML DOM '''
-        soup = BeautifulSoup(self.annotationXML[pol].toxml(), features="xml")
         azimuthFmRate = defaultdict(list)
-        for afmr in soup.find_all('azimuthFmRate'):
+        for afmr in self.annotationXML[pol].find_all('azimuthFmRate'):
             azimuthFmRate['azimuthTime'].append(datetime.strptime(afmr.azimuthTime.text, '%Y-%m-%dT%H:%M:%S.%f'))
             azimuthFmRate['t0'].append(float(afmr.t0.text))
             if 'azimuthFmRatePolynomial' in afmr.decode():
@@ -1339,6 +1328,7 @@ class Sentinel1Image(Nansat):
             azimuthFmRate['azimuthFmRatePolynomial'].append(afmrp)
         return azimuthFmRate
     
+    @cache
     def focusedBurstLengthInTime(self, pol):
         ''' Get focused burst length in zero-Doppler time domain
 
@@ -1347,17 +1337,14 @@ class Sentinel1Image(Nansat):
         focusedBurstLengthInTime : dict
             one values for each subswath (different for IW and EW)
         '''
-        azimuthFrequency = get_DOM_nodeValue(
-            self.annotationXML[pol],['azimuthFrequency'],'float')
+        azimuthFrequency = float(self.annotationXML[pol].find('azimuthFrequency').text)
         azimuthTimeIntevalInSLC = 1. / azimuthFrequency
-        inputDimensionsList = self.annotationXML[pol].getElementsByTagName(
-            'inputDimensions')
         focusedBurstLengthInTime = {}
         # nominalLinesPerBurst should be smaller than the real values
         nominalLinesPerBurst = {'IW':1450, 'EW':1100}[self.obsMode]
-        for iList in inputDimensionsList:
-            swath = get_DOM_nodeValue(iList,['swath'],'str')
-            numberOfInputLines = get_DOM_nodeValue(iList,['numberOfInputLines'],'int')
+        for inputDimensions in self.annotationXML[pol].find_all('inputDimensions'):
+            swath = inputDimensions.swath.text
+            numberOfInputLines = int(inputDimensions.numberOfInputLines.text)
             numberOfBursts = max(
                 [ primeNumber for primeNumber in range(1,numberOfInputLines//nominalLinesPerBurst+1)
                   if (numberOfInputLines % primeNumber)==0 ] )
@@ -1397,7 +1384,7 @@ class Sentinel1Image(Nansat):
         # zero-Doppler azimuth time at each burst start
         burstStartTime = np.array([
             (t-self.time_coverage_center).total_seconds()
-            for t in self.import_antennaPattern(pol)[subswathID]['azimuthTime'] ])
+            for t in self.antenna_pattern(pol)[subswathID]['azimuthTime'] ])
         # burst overlapping length
         burstOverlap = fullBurstLength - np.diff(burstStartTime)
         burstOverlap = np.hstack([burstOverlap[0], burstOverlap])
