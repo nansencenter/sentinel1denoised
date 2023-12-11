@@ -3,10 +3,10 @@ from datetime import datetime, timedelta
 import glob
 import json
 import os
+from pathlib import Path
 import requests
 import shutil
 import xml.etree.ElementTree as ET
-from xml.dom.minidom import parse, parseString
 import zipfile
 from functools import cached_property, cache
 
@@ -22,7 +22,6 @@ from scipy.ndimage import gaussian_filter
 from s1denoise.utils import (
     cost,
     fit_noise_scaling_coeff,
-    get_DOM_nodeValue,
     fill_gaps,
     cubic_hermite_interpolation,
     parse_azimuth_time,
@@ -40,6 +39,107 @@ ANTENNA_STEERING_RATE = { 'IW1': 1.590368784,
                           'EW4': 2.512694636,
                           'EW5': 2.122855427 }    # degrees per second. Available from AUX_INS
 
+class Sentinel1ImageXml:
+    def __init__(self, filename):
+        self.txPol = filename.split(os.sep)[-1][15]    # H or V
+        self.platform = filename.split(os.sep)[-1][:3]    # S1A or S1B
+
+        # get list of all filenames
+        if zipfile.is_zipfile(filename):
+            with zipfile.PyZipFile(filename) as zf:
+                filenames = zf.namelist()
+        else:
+            filenames = [str(i) for i in Path(f'{filename}/').rglob('*')]
+        manifest_file = [f for f in filenames if 'manifest.safe' in f][0]
+
+        # find annotation, calibration and noise files
+        self.xml = dict(annotation = {}, calibration = {}, noise = {})
+        for pol in [self.txPol + 'H', self.txPol + 'V']:
+            self.xml['annotation'][pol] = [f for f in filenames if ('annotation/s1' in f and pol.lower() in f)][0]
+            self.xml['calibration'][pol] = [f for f in filenames if ('calibration-s1' in f and pol.lower() in f)][0]
+            self.xml['noise'][pol] = [f for f in filenames if ('noise-s1' in f and pol.lower() in f)][0]
+
+        # read and parse XML files
+        if zipfile.is_zipfile(filename):
+            with zipfile.PyZipFile(filename) as zf:
+                for name in self.xml:
+                    for pol in self.xml[name]:
+                        self.xml[name][pol] = BeautifulSoup(zf.read(self.xml[name][pol]), features="xml")
+                self.xml['manifest'] = BeautifulSoup(zf.read(manifest_file), features="xml")
+        else:
+            for name in self.xml:
+                for pol in self.xml[name]:
+                    with open(self.xml[name][pol]) as ff:
+                        self.xml[name][pol] = BeautifulSoup(ff.read(), features="xml")
+            with open(manifest_file) as ff:
+                self.xml['manifest'] = BeautifulSoup(ff.read(), features="xml")
+
+        # get the auxiliary calibration file
+        for resource in (self.xml['manifest'].find_all('resource') +
+                         self.xml['manifest'].find_all('safe:resource')):
+            if resource.attrs['role'] == 'AUX_CAL':
+                auxCalibFilename = resource.attrs['name'].split('/')[-1]
+        self.set_aux_data_dir()
+        self.download_aux_calibration(auxCalibFilename)
+        with open(self.auxiliaryCalibration_file) as f:
+            self.xml['auxiliary'] = BeautifulSoup(f.read(), features="xml")
+
+    def set_aux_data_dir(self):
+        """ Set directory where aux calibration data is stored """
+        self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.path.expanduser('~')),
+                                         '.s1denoise')
+        if not os.path.exists(self.aux_data_dir):
+            os.makedirs(self.aux_data_dir)
+
+    def download_aux_calibration(self, filename):
+        self.auxiliaryCalibration_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % self.platform.lower())
+        if os.path.exists(self.auxiliaryCalibration_file):
+            return
+        vs = filename.split('_')[3].lstrip('V')
+        validity_start = f'{vs[:4]}-{vs[4:6]}-{vs[6:8]}T{vs[9:11]}:{vs[11:13]}:{vs[13:15]}'
+        cd = filename.split('_')[4].lstrip('G')
+        creation_date = f'{cd[:4]}-{cd[4:6]}-{cd[6:8]}T{cd[9:11]}:{cd[11:13]}:{cd[13:15]}'
+        def get_remote_url(api_url):
+            with requests.get(api_url, stream=True) as r:
+                rjson = json.loads(r.content.decode())
+                remote_url = rjson['results'][0]['remote_url']
+                physical_name = rjson['results'][0]['physical_name']
+                return remote_url, physical_name
+        try:
+            remote_url, physical_name = get_remote_url(f'https://sar-mpc.eu/api/v1/?product_type=AUX_CAL&validity_start={validity_start}&creation_date={creation_date}')
+        except:
+            remote_url, physical_name = get_remote_url(f'https://sar-mpc.eu/api/v1/?product_type=AUX_CAL&validity_start={validity_start}')
+
+        download_file = os.path.join(self.aux_data_dir, physical_name)
+        print(f'downloading {filename}.zip from {remote_url}')
+        with requests.get(remote_url, stream=True) as r:
+            with open(download_file, "wb") as f:
+                f.write(r.content)
+
+        with zipfile.ZipFile(download_file, 'r') as download_zip:
+            download_zip.extractall(path=self.aux_data_dir)
+        output_dir = f'{self.aux_data_dir}/{filename}'
+        if not os.path.exists(output_dir):
+            # in case the physical_name of the downloaded file does not exactly match the filename from manifest
+            # the best found AUX-CAL file is copied to the filename from manifest
+            shutil.copytree(download_file.rstrip('.zip'), output_dir)
+
+    @property
+    def annotation(self):
+        return self.xml['annotation']
+    @property
+    def calibration(self):
+        return self.xml['calibration']
+    @property
+    def noise(self):
+        return self.xml['noise']
+    @property
+    def manifest(self):
+        return self.xml['manifest']
+    @property
+    def auxiliary(self):
+        return self.xml['auxiliary']
+
 
 class Sentinel1Image(Nansat):
     """ Cal/Val routines for Sentinel-1 performed on range noise vector coordinatess"""
@@ -54,67 +154,17 @@ class Sentinel1Image(Nansat):
                       'EW_GRDM_1SDV'  ] ):
              raise ValueError( 'Source file must be Sentinel-1A/1B '
                  'IW_GRDH_1SDH, IW_GRDH_1SDV, EW_GRDM_1SDH, or EW_GRDM_1SDV product.' )
-        self.platform = self.filename.split(os.sep)[-1][:3]    # S1A or S1B
         self.obsMode = self.filename.split(os.sep)[-1][4:6]    # IW or EW
         pol_mode = os.path.basename(self.filename).split('_')[3]
         self.crosspol = {'1SDH': 'HV', '1SDV': 'VH'}[pol_mode]
         self.pols = {'1SDH': ['HH', 'HV'], '1SDV': ['VH', 'VV']}[pol_mode]
         self.swath_ids = range(1, {'IW':3, 'EW':5}[self.obsMode]+1)
-        txPol = self.filename.split(os.sep)[-1][15]    # H or V
-        self.annotationXML = {}
-        self.calibrationXML = {}
-        self.noiseXML = {}
-
-        if zipfile.is_zipfile(self.filename):
-            with zipfile.PyZipFile(self.filename) as zf:
-                annotationFiles = [fn for fn in zf.namelist() if 'annotation/s1' in fn]
-                calibrationFiles = [fn for fn in zf.namelist()
-                                    if 'annotation/calibration/calibration-s1' in fn]
-                noiseFiles = [fn for fn in zf.namelist() if 'annotation/calibration/noise-s1' in fn]
-
-                for pol in [txPol + 'H', txPol + 'V']:
-                    self.annotationXML[pol] = BeautifulSoup(
-                            [zf.read(fn) for fn in annotationFiles if pol.lower() in fn][0],
-                            features="xml")
-                    self.calibrationXML[pol] = parseString(
-                        [zf.read(fn) for fn in calibrationFiles if pol.lower() in fn][0])
-                    self.noiseXML[pol] = BeautifulSoup(
-                        [zf.read(fn) for fn in noiseFiles if pol.lower() in fn][0], features="xml")
-                self.manifestXML = parseString(zf.read([fn for fn in zf.namelist()
-                                                        if 'manifest.safe' in fn][0]))
-        else:
-            annotationFiles = [fn for fn in glob.glob(self.filename+'/annotation/*') if 's1' in fn]
-            calibrationFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
-                                if 'calibration-s1' in fn]
-            noiseFiles = [fn for fn in glob.glob(self.filename+'/annotation/calibration/*')
-                          if 'noise-s1' in fn]
-
-            for pol in [txPol + 'H', txPol + 'V']:
-
-                for fn in annotationFiles:
-                    if pol.lower() in fn:
-                        with open(fn) as ff:
-                            self.annotationXML[pol] = BeautifulSoup(ff.read(), features="xml")
-
-                for fn in calibrationFiles:
-                    if pol.lower() in fn:
-                        with open(fn) as ff:
-                            self.calibrationXML[pol] = parseString(ff.read())
-
-                for fn in noiseFiles:
-                    if pol.lower() in fn:
-                        with open(fn) as ff:
-                            self.noiseXML[pol] = BeautifulSoup(ff.read(), features="xml")
-
-            with open(glob.glob(self.filename+'/manifest.safe')[0]) as ff:
-                self.manifestXML = parseString(ff.read())
-
         # scene center time will be used as the reference for relative azimuth time in seconds
         self.time_coverage_center = ( self.time_coverage_start + timedelta(
             seconds=(self.time_coverage_end - self.time_coverage_start).total_seconds()/2) )
+        self.xml = Sentinel1ImageXml(self.filename)
         # get processor version of Sentinel-1 IPF (Instrument Processing Facility)
-        self.IPFversion = float(self.manifestXML.getElementsByTagName('safe:software')[0]
-                                .attributes['version'].value)
+        self.IPFversion = float(self.xml.manifest.find('safe:software').attrs['version'])
         if self.IPFversion < 2.43:
             print('\nERROR: IPF version of input image is lower than 2.43! '
                   'Denoising vectors in annotation files are not qualified. '
@@ -122,15 +172,6 @@ class Sentinel1Image(Nansat):
         elif 2.43 <= self.IPFversion < 2.53:
             print('\nWARNING: IPF version of input image is lower than 2.53! '
                   'ESA default noise correction result might be wrong.\n')
-        # get the auxiliary calibration file
-        resourceList = self.manifestXML.getElementsByTagName('resource')
-        resourceList += self.manifestXML.getElementsByTagName('safe:resource')
-        for resource in resourceList:
-            if resource.attributes['role'].value=='AUX_CAL':
-                auxCalibFilename = resource.attributes['name'].value.split('/')[-1]
-        self.set_aux_data_dir()
-        self.download_aux_calibration(auxCalibFilename, self.platform.lower())
-        self.auxiliaryCalibrationXML = parse(self.auxiliaryCalibration_file)
 
     @cached_property
     def scallopingGain(self, pol='HV'):
@@ -154,7 +195,7 @@ class Sentinel1Image(Nansat):
         swath_bounds = {}
         for pol in self.pols:
             swath_bounds[pol] = {}
-            for swathMerge in self.annotationXML[pol].find_all('swathMerge'):
+            for swathMerge in self.xml.annotation[pol].find_all('swathMerge'):
                 swath_bounds[pol][swathMerge.swath.text] = defaultdict(list)
                 for swathBounds in swathMerge.find_all('swathBounds'):
                     for name in names:
@@ -178,7 +219,7 @@ class Sentinel1Image(Nansat):
         geolocation = {}
         for pol in self.pols:
             geolocation[pol] = defaultdict(list)
-            for p in self.annotationXML[pol].find_all('geolocationGridPoint'):
+            for p in self.xml.annotation[pol].find_all('geolocationGridPoint'):
                 for c in p:
                     if c.name:
                         geolocation[pol][c.name].append(geolocation_keys[c.name](c.text))
@@ -205,9 +246,8 @@ class Sentinel1Image(Nansat):
     def calibration(self):
         calibration = {}
         for pol in self.pols:
-            soup = BeautifulSoup(self.calibrationXML[pol].toxml(), features="xml")
             calibration[pol] = defaultdict(list)
-            for cv in soup.find_all('calibrationVector'):
+            for cv in self.xml.calibration[pol].find_all('calibrationVector'):
                 for n in cv:
                     if n.name:
                         calibration[pol][n.name].append(n.text)
@@ -218,6 +258,26 @@ class Sentinel1Image(Nansat):
                 calibration[pol][key] = np.array([list(map(float, p.split())) for p in calibration[pol][key]])
         return calibration
 
+    @cached_property
+    def aux_calibration_params(self):
+        swaths = [f'{self.obsMode}{li}' for li in self.swath_ids]
+        calibration_params = {
+            'HH': {swath: {} for swath in swaths},
+            'HV': {swath: {} for swath in swaths}
+        }
+        for calibrationParams in self.xml.auxiliary.find_all('calibrationParams'):
+            swath = calibrationParams.swath.text
+            pol = calibrationParams.polarisation.text
+            if pol in calibration_params and swath in calibration_params[pol]:
+                calibration_params[pol][swath]['elevationAngleIncrement'] = float(calibrationParams.elevationAntennaPattern.elevationAngleIncrement.text)
+                calibration_params[pol][swath]['azimuthAngleIncrement'] = float(calibrationParams.azimuthAntennaElementPattern.azimuthAngleIncrement.text)
+                calibration_params[pol][swath]['absoluteCalibrationConstant'] = float(calibrationParams.absoluteCalibrationConstant.text)
+                calibration_params[pol][swath]['noiseCalibrationFactor'] = float(calibrationParams.noiseCalibrationFactor.text)
+                calibration_params[pol][swath]['elevationAntennaPatternCount'] = int(calibrationParams.elevationAntennaPattern.values.attrs['count'])
+                calibration_params[pol][swath]['elevationAntennaPattern'] = np.array([float(i) for i in calibrationParams.elevationAntennaPattern.values.text.split()])
+                calibration_params[pol][swath]['azimuthAntennaPattern'] = np.array([float(i) for i in calibrationParams.azimuthAntennaElementPattern.values.text.split()])
+        return calibration_params
+
     @cache
     def noise_range(self, pol):
         if self.IPFversion < 2.9:
@@ -227,8 +287,7 @@ class Sentinel1Image(Nansat):
             noiseRangeVectorName = 'noiseRangeVector'
             noiseLutName = 'noiseRangeLut'
         noise_range = defaultdict(list)
-        #soup = BeautifulSoup(self.noiseXML[pol].toxml(), features="xml")
-        for noiseVector in self.noiseXML[pol].find_all(noiseRangeVectorName):
+        for noiseVector in self.xml.noise[pol].find_all(noiseRangeVectorName):
             noise_range['azimuthTime'].append(parse_azimuth_time(noiseVector.azimuthTime.text))
             noise_range['line'].append(int(noiseVector.line.text))
             noise_range['pixel'].append(np.array([int(i) for i in noiseVector.pixel.text.split()]))
@@ -250,8 +309,7 @@ class Sentinel1Image(Nansat):
                     noise = [np.array([1.0, 1.0])])
         else:
             int_names = ['firstAzimuthLine', 'firstRangeSample', 'lastAzimuthLine', 'lastRangeSample']
-            #soup = BeautifulSoup(self.noiseXML[pol].toxml(), features="xml")
-            for noiseAzimuthVector in self.noiseXML[pol].find_all('noiseAzimuthVector'):
+            for noiseAzimuthVector in self.xml.noise[pol].find_all('noiseAzimuthVector'):
                 swath = noiseAzimuthVector.swath.text
                 for int_name in int_names:
                     noise_azimuth[swath][int_name].append(int(noiseAzimuthVector.find(int_name).text))
@@ -259,47 +317,6 @@ class Sentinel1Image(Nansat):
                 noise_azimuth[swath]['noise'].append(np.array([float(i) for i in noiseAzimuthVector.noiseAzimuthLut.text.split()]))
         return noise_azimuth
 
-    def set_aux_data_dir(self):
-        """ Set directory where aux calibration data is stored """
-        self.aux_data_dir = os.path.join(os.environ.get('XDG_DATA_HOME', os.path.expanduser('~')),
-                                         '.s1denoise')
-        if not os.path.exists(self.aux_data_dir):
-            os.makedirs(self.aux_data_dir)
-
-    def download_aux_calibration(self, filename, platform):
-        self.auxiliaryCalibration_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % platform)
-        if os.path.exists(self.auxiliaryCalibration_file):
-            return
-        vs = filename.split('_')[3].lstrip('V')
-        validity_start = f'{vs[:4]}-{vs[4:6]}-{vs[6:8]}T{vs[9:11]}:{vs[11:13]}:{vs[13:15]}'
-
-        cd = filename.split('_')[4].lstrip('G')
-        creation_date = f'{cd[:4]}-{cd[4:6]}-{cd[6:8]}T{cd[9:11]}:{cd[11:13]}:{cd[13:15]}'
-        def get_remote_url(api_url):
-            with requests.get(api_url, stream=True) as r:
-                rjson = json.loads(r.content.decode())
-                remote_url = rjson['results'][0]['remote_url']
-                physical_name = rjson['results'][0]['physical_name']
-                return remote_url, physical_name
-
-        try:
-            remote_url, physical_name = get_remote_url(f'https://sar-mpc.eu/api/v1/?product_type=AUX_CAL&validity_start={validity_start}&creation_date={creation_date}')
-        except:
-            remote_url, physical_name = get_remote_url(f'https://sar-mpc.eu/api/v1/?product_type=AUX_CAL&validity_start={validity_start}')
-
-        download_file = os.path.join(self.aux_data_dir, physical_name)
-        print(f'downloading {filename}.zip from {remote_url}')
-        with requests.get(remote_url, stream=True) as r:
-            with open(download_file, "wb") as f:
-                f.write(r.content)
-
-        with zipfile.ZipFile(download_file, 'r') as download_zip:
-            download_zip.extractall(path=self.aux_data_dir)
-        output_dir = f'{self.aux_data_dir}/{filename}'
-        if not os.path.exists(output_dir):
-            # in case the physical_name of the downloaded file does not exactly match the filename from manifest
-            # the best found AUX-CAL file is copied to the filename from manifest
-            shutil.copytree(download_file.rstrip('.zip'), output_dir)
 
     def get_swath_id_vectors(self, pol, pixel=None):
         if pixel is None:
@@ -352,7 +369,7 @@ class Sentinel1Image(Nansat):
         azimuth_time = [(t - self.time_coverage_center).total_seconds()
                         for t in self.noise_range(pol)['azimuthTime']]
         pg = defaultdict(dict)
-        for pgpa in self.annotationXML[pol].find_all(pg_name):
+        for pgpa in self.xml.annotation[pol].find_all(pg_name):
             pg[pgpa.parent.parent.parent.swath.text][pgpa.parent.azimuthTime.text] = float(pgpa.text)
 
         pg_swaths = {}
@@ -475,10 +492,9 @@ class Sentinel1Image(Nansat):
         It computes EAP for input boresight angles
 
         """
-        elevationAntennaPatternLUT = self.import_elevationAntennaPattern(pol)
-        eap_lut = np.array(elevationAntennaPatternLUT[subswathID]['elevationAntennaPattern'])
-        recordLength = elevationAntennaPatternLUT[subswathID]['elevationAntennaPatternCount']
-        eai_lut = elevationAntennaPatternLUT[subswathID]['elevationAngleIncrement']
+        eap_lut = self.aux_calibration_params[pol][subswathID]['elevationAntennaPattern']
+        recordLength = self.aux_calibration_params[pol][subswathID]['elevationAntennaPatternCount']
+        eai_lut = self.aux_calibration_params[pol][subswathID]['elevationAngleIncrement']
         if recordLength == eap_lut.shape[0]:
             # in case if elevationAntennaPattern is given in dB
             amplitudeLUT = 10**(eap_lut/10)
@@ -488,6 +504,7 @@ class Sentinel1Image(Nansat):
         angleLUT = np.arange(-(recordLength//2),+(recordLength//2)+1) * eai_lut        
         eap_interpolator = InterpolatedUnivariateSpline(angleLUT, np.sqrt(amplitudeLUT))
         return eap_interpolator
+
     
     def get_boresight_angle_interpolator(self, pol):
         """ Prepare interpolator for boresight angles. It computes BA for input x,y coordinates. """
@@ -518,7 +535,7 @@ class Sentinel1Image(Nansat):
         rsl_power : float power for RSL = (2 * Rref / time / C)^rsl_power
 
         """
-        referenceRange = float(self.annotationXML[pol].find('referenceRange').text)
+        referenceRange = float(self.xml.annotation[pol].find('referenceRange').text)
         rangeSpreadingLoss = (referenceRange / self.geolocation[pol]['slantRangeTime'] / SPEED_OF_LIGHT * 2)**rsl_power
         rsp_interpolator = RectBivariateSpline(
             self.geolocation[pol]['line'], self.geolocation[pol]['pixel'], rangeSpreadingLoss)
@@ -575,7 +592,6 @@ class Sentinel1Image(Nansat):
                             pixel_shift = minimize(cost, 0, args=(valid_pix[skip:-skip], noise_interpolator, apg[skip:-skip])).x[0]
                             noise_shifted0 = noise_interpolator(valid_pix + pixel_shift)
                             noise_shifted[v1][valid2] = noise_shifted0
-
         return noise_shifted
 
     def get_corrected_noise_vectors(self, pol, nesz, pixel=None, add_pb=True):
@@ -1022,37 +1038,11 @@ class Sentinel1Image(Nansat):
             sigma0 = fill_gaps(sigma0, sigma0 <= 0)
         return sigma0
 
-    def import_elevationAntennaPattern(self, pol):
-        ''' Import elevation antenna pattern from auxiliary calibration XML DOM '''
-        calParamsList = self.auxiliaryCalibrationXML.getElementsByTagName('calibrationParams')
-        elevationAntennaPattern = { '%s%s' % (self.obsMode, li):
-                                        { 'elevationAngleIncrement':[],
-                                          'elevationAntennaPattern':[],
-                                          'absoluteCalibrationConstant':[],
-                                          'noiseCalibrationFactor':[],
-                                          'elevationAntennaPatternCount': None
-                                        }
-                                    for li in self.swath_ids }
-        for iList in calParamsList:
-            swath = get_DOM_nodeValue(iList,['swath'])
-            pol = get_DOM_nodeValue(iList,['polarisation'])
-            if (swath in elevationAntennaPattern.keys()) and (pol==pol):
-                elem = iList.getElementsByTagName('elevationAntennaPattern')[0]
-                for k in elevationAntennaPattern[swath].keys():
-                    if k=='elevationAngleIncrement':
-                        elevationAntennaPattern[swath][k] = get_DOM_nodeValue(elem,[k],'float')
-                    elif k=='elevationAntennaPattern':
-                        elevationAntennaPattern[swath][k] = get_DOM_nodeValue(elem,['values'],'float')
-                        elevationAntennaPattern[swath]['elevationAntennaPatternCount'] = int(elem.getElementsByTagName('values')[0].getAttribute('count'))
-                    elif k in ['absoluteCalibrationConstant', 'noiseCalibrationFactor']:
-                        elevationAntennaPattern[swath][k] = get_DOM_nodeValue(iList,[k],'float')
-        return elevationAntennaPattern
-
     @cache
     def antenna_pattern(self, pol):
         list_keys = ['slantRangeTime', 'elevationAngle', 'elevationPattern', 'incidenceAngle']
         antenna_pattern = {}
-        antennaPatternList = self.annotationXML[pol].find('antennaPatternList')
+        antennaPatternList = self.xml.annotation[pol].find('antennaPatternList')
         compute_roll = True
         for antennaPattern in antennaPatternList.find_all('antennaPattern'):
             swath = antennaPattern.swath.text
@@ -1076,7 +1066,7 @@ class Sentinel1Image(Nansat):
         orbit = { 'time':[],
                   'position':{'x':[], 'y':[], 'z':[]},
                   'velocity':{'x':[], 'y':[], 'z':[]} }
-        for o in self.annotationXML[pol].find('orbitList').find_all('orbit'):
+        for o in self.xml.annotation[pol].find('orbitList').find_all('orbit'):
             orbit['time'].append(parse_azimuth_time(o.time.text))
             for name1 in ['position', 'velocity']:
                 for name2 in ['x', 'y', 'z']:
@@ -1243,32 +1233,6 @@ class Sentinel1Image(Nansat):
                 subswathIndexMap[fal:lal+1,frs:lrs+1] = iSW
         return subswathIndexMap
     
-    def import_azimuthAntennaElementPattern(self, pol):
-        ''' Import azimuth antenna element pattern from auxiliary calibration XML DOM '''
-        calParamsList = self.auxiliaryCalibrationXML.getElementsByTagName('calibrationParams')
-        azimuthAntennaElementPattern = { '%s%s' % (self.obsMode, li):
-                                             { 'azimuthAngleIncrement':[],
-                                               'azimuthAntennaElementPattern':[],
-                                               'absoluteCalibrationConstant':[],
-                                               'noiseCalibrationFactor':[] }
-                                         for li in range(1, {'IW':3, 'EW':5}[self.obsMode]+1) }
-        for iList in calParamsList:
-            swath = get_DOM_nodeValue(iList,['swath'])
-            pol = get_DOM_nodeValue(iList,['polarisation'])
-            if (swath in azimuthAntennaElementPattern.keys()) and (pol==pol):
-                elem = iList.getElementsByTagName('azimuthAntennaElementPattern')[0]
-                for k in azimuthAntennaElementPattern[swath].keys():
-                    if k=='azimuthAngleIncrement':
-                        azimuthAntennaElementPattern[swath][k] = (
-                            get_DOM_nodeValue(elem,[k],'float') )
-                    elif k=='azimuthAntennaElementPattern':
-                        azimuthAntennaElementPattern[swath][k] = (
-                            get_DOM_nodeValue(elem,['values'],'float') )
-                    else:
-                        azimuthAntennaElementPattern[swath][k] = (
-                            get_DOM_nodeValue(iList,[k],'float') )
-        return azimuthAntennaElementPattern
-    
     def subswathCenterSampleIndex(self, pol):
         ''' Range center pixel indices along azimuth for each subswath '''
         swathBounds = self.swath_bounds[pol]
@@ -1318,7 +1282,7 @@ class Sentinel1Image(Nansat):
     def import_azimuthFmRate(self, pol):
         ''' Import azimuth frequency modulation rate from annotation XML DOM '''
         azimuthFmRate = defaultdict(list)
-        for afmr in self.annotationXML[pol].find_all('azimuthFmRate'):
+        for afmr in self.xml.annotation[pol].find_all('azimuthFmRate'):
             azimuthFmRate['azimuthTime'].append(datetime.strptime(afmr.azimuthTime.text, '%Y-%m-%dT%H:%M:%S.%f'))
             azimuthFmRate['t0'].append(float(afmr.t0.text))
             if 'azimuthFmRatePolynomial' in afmr.decode():
@@ -1337,12 +1301,12 @@ class Sentinel1Image(Nansat):
         focusedBurstLengthInTime : dict
             one values for each subswath (different for IW and EW)
         '''
-        azimuthFrequency = float(self.annotationXML[pol].find('azimuthFrequency').text)
+        azimuthFrequency = float(self.xml.annotation[pol].find('azimuthFrequency').text)
         azimuthTimeIntevalInSLC = 1. / azimuthFrequency
         focusedBurstLengthInTime = {}
         # nominalLinesPerBurst should be smaller than the real values
         nominalLinesPerBurst = {'IW':1450, 'EW':1100}[self.obsMode]
-        for inputDimensions in self.annotationXML[pol].find_all('inputDimensions'):
+        for inputDimensions in self.xml.annotation[pol].find_all('inputDimensions'):
             swath = inputDimensions.swath.text
             numberOfInputLines = int(inputDimensions.numberOfInputLines.text)
             numberOfBursts = max(
@@ -1357,10 +1321,9 @@ class Sentinel1Image(Nansat):
     
     def get_subswathScallopingGain(self, pol, subswathID):
         # azimuth antenna element patterns (AAEP) lookup table for given subswath
-        AAEP = self.import_azimuthAntennaElementPattern(pol)[subswathID]
-        gainAAEP = np.array(AAEP['azimuthAntennaElementPattern'])
-        angleAAEP = ( np.arange(-(len(gainAAEP)//2), len(gainAAEP)//2+1)
-                      * AAEP['azimuthAngleIncrement'] )
+        gainAAEP = self.aux_calibration_params[pol][subswathID]['azimuthAntennaPattern']
+        azimuthAngleIncrement = self.aux_calibration_params[pol][subswathID]['azimuthAngleIncrement']
+        angleAAEP = np.arange(-(len(gainAAEP)//2), len(gainAAEP)//2+1) * azimuthAngleIncrement
         # subswath range center pixel index
         subswathCenterSampleIndex = self.subswathCenterSampleIndex(pol)[subswathID]
         # slant range time along subswath range center

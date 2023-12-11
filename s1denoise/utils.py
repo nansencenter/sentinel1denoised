@@ -39,27 +39,6 @@ def fit_noise_scaling_coeff(meanS0, meanN0, pixelIndex):
                              w=weight, deg=1, full=True)[1].item()
     return scalingFactor, correlationCoefficient, fitResidual
 
-def get_DOM_nodeValue(element, tags, oType='str'):
-    ''' Get value of XML DOM sub-element based on tags '''
-    if oType not in ['str', 'int', 'float']:
-        raise ValueError('see error message.')
-    value = get_DOM_subElement(element, tags).childNodes[0].nodeValue.split()
-    if oType == 'str':
-        value = [str(v) for v in value]
-    elif oType == 'int':
-        value = [int(round(float(v))) for v in value]
-    elif oType == 'float':
-        value = [float(v) for v in value]
-    if len(value)==1:
-        value = value[0]
-    return value
-
-def get_DOM_subElement(element, tags):
-    ''' Get sub-element from XML DOM element based on tags '''
-    for tag in tags:
-        element = element.getElementsByTagName(tag)[0]
-    return element
-
 def fill_gaps(array, mask, distance=15):
     """ Fill gaps in input raster
 
