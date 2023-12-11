@@ -174,14 +174,6 @@ class Sentinel1Image(Nansat):
                   'ESA default noise correction result might be wrong.\n')
 
     @cached_property
-    def scallopingGain(self, pol='HV'):
-        sg = {}
-        for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
-            subswathID = '%s%s' % (self.obsMode, iSW)
-            sg[subswathID] = self.get_subswathScallopingGain(pol, subswathID)
-        return sg
-
-    @cached_property
     def swath_bounds(self):
         """ Boundaries of blocks in each swath for each polarisation """
         names = {
@@ -191,7 +183,6 @@ class Sentinel1Image(Nansat):
             'lastAzimuthLine' : int,
             'lastRangeSample' : int,
         }
-
         swath_bounds = {}
         for pol in self.pols:
             swath_bounds[pol] = {}
@@ -1319,7 +1310,8 @@ class Sentinel1Image(Nansat):
                 raise ValueError('number of bursts cannot be determined.')
         return focusedBurstLengthInTime
     
-    def get_subswathScallopingGain(self, pol, subswathID):
+    @cache
+    def scalloping_gain(self, pol, subswathID):
         # azimuth antenna element patterns (AAEP) lookup table for given subswath
         gainAAEP = self.aux_calibration_params[pol][subswathID]['azimuthAntennaPattern']
         azimuthAngleIncrement = self.aux_calibration_params[pol][subswathID]['azimuthAngleIncrement']
@@ -1387,7 +1379,7 @@ class Sentinel1Image(Nansat):
             for i, l in enumerate(line):
                 for j in range(1,6):
                     gpi = swath_idvs[i] == j
-                    scall[i][gpi] = self.scallopingGain[f'EW{j}'][l]            
+                    scall[i][gpi] = self.scalloping_gain(pol, f'EW{j}')[l]
             return scall
 
         noiseAzimuthVector = self.noise_azimuth(pol)
@@ -1419,7 +1411,7 @@ class Sentinel1Image(Nansat):
             subswathIndexMap = self.subswathIndexMap(pol)
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
                 subswathID = '%s%s' % (self.obsMode, iSW)
-                scallopingGain = self.scallopingGain[subswathID]
+                scallopingGain = self.scalloping_gain(pol, subswathID)
                 # assign computed scalloping gain into each subswath
                 valid = (subswathIndexMap==iSW)
                 scall_fs[valid] = (
