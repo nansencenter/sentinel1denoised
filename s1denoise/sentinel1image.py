@@ -308,7 +308,6 @@ class Sentinel1Image(Nansat):
                 noise_azimuth[swath]['noise'].append(np.array([float(i) for i in noiseAzimuthVector.noiseAzimuthLut.text.split()]))
         return noise_azimuth
 
-
     def get_swath_id_vectors(self, pol, pixel=None):
         if pixel is None:
             pixel = self.noise_range(pol)['pixel']
@@ -384,7 +383,7 @@ class Sentinel1Image(Nansat):
         for i, gtot in enumerate(tg_vectors):
             for j in range(1,6):
                 gpi = swath_ids[i] == j
-                gtot[gpi] *= pg_swaths[f'EW{j}'][i]
+                gtot[gpi] *= pg_swaths[f'{self.obsMode}{j}'][i]
         return tg_vectors
 
     def get_tg_scales_offsets(self):
@@ -1379,9 +1378,8 @@ class Sentinel1Image(Nansat):
             for i, l in enumerate(line):
                 for j in range(1,6):
                     gpi = swath_idvs[i] == j
-                    scall[i][gpi] = self.scalloping_gain(pol, f'EW{j}')[l]
+                    scall[i][gpi] = self.scalloping_gain(pol, f'{self.obsMode}{j}')[l]
             return scall
-
         noiseAzimuthVector = self.noise_azimuth(pol)
         for iSW in self.swath_ids:
             swath = f'{self.obsMode}{iSW}'
