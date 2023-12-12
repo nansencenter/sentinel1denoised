@@ -22,19 +22,13 @@ is to use [Anaconda](https://docs.conda.io/en/latest/miniconda.html).
 
 ```shell
 # create conda environment with key requirements
-conda create -y -n s1denoise gdal cartopy pip
+conda env create -f environment.yml
 
 # activate environment
 conda activate s1denoise
 
-# install other reqs using pip
-pip install pythesint netcdf4 nansat
-
-# update metadata vocabularies
-python -c 'import pythesint as pti; pti.update_all_vocabularies()'
-
 # install s1denoise
-pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.3.3.tar.gz
+pip install https://github.com/nansencenter/sentinel1denoised/archive/v1.4.0.tar.gz
 
 ```
 
@@ -60,25 +54,32 @@ s1 = Sentinel1Image('/path/to/data/S1B_EW_GRDM_1SDH_INPUTFILE.zip')
 # run thermal noise correction in HV polarisation with the default ESA algorithm
 s0hve = s1.remove_thermal_noise('HV', algorithm='ESA')
 
-# run thermal noise correction in HV polarisation with the NEW algorithm
+# run thermal noise correction in HV polarisation with the default NERSC algorithm
 s0_hv = s1.remove_thermal_noise('HV')
+
+# run thermal noise correction in HV polarisation with the  NERSC_TG algorithm applicable for old Sentinel-1 data
+s0_hv = s1.remove_thermal_noise('HV', algorithm='NERSC_TG')
 
 # run thermal and texture noise correction in HV polarisation
 s0_hv = s1.remove_texture_noise('HV')
 
 ```
 
-Process a single file with thermal, textural and angular correction and export in dB:
+Process a single file with thermal, textural and angular correction and export in [dB] in a numpy file:
 
-`s1_correction.py INPUTFILE.zip OUTPUTFILE.tif`
+`s1_correction.py INPUTFILE.zip OUTPUTFILE.npz`
 
-Process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
+Process a single file and export as GeoTIFF (requires Nansat):
 
-`docker run --rm -v /input_dir:/input_dir -v /output_dir:/output_dir s1denoise s1_correction.py /input_dir/INPUTFILE.zip /output_dir/OUPUTFILE.tif`
+`s1_correction.py INPUTFILE.zip OUTPUTFILE.npz -g`
 
 With option `-m` the script will also save landmask in Numpy format in a separate file with name `OUTPUTFILE.tif_mask.npz`:
 
-`s1_correction.py -m INPUTFILE.zip OUTPUTFILE.tif`
+`s1_correction.py INPUTFILE.zip OUTPUTFILE.tif -m`
+
+Process a single file using Docker (replace `input_dir` and `output_dir` with actual directories):
+
+`docker run --rm -v /data_dir:/data_dir s1denoise s1_correction.py /data_dir/INPUTFILE.zip /data_dir/OUPUTFILE.tif`
 
 Note that for enabling the landmask functionality, you need to download and install the watermask:
 
@@ -95,8 +96,7 @@ rm $MOD44WPATH/MOD44W.tgz
 
 ## Experimental scripts
 
-Sub-directories in `s1denoise/experimentalData` contain scripts for training the noise scaling and power balancing coefficients and extra scaling.
-See README files in these sub-dirs for details.
+Sub-directories in `s1denoise/training` and `s1denoise/validation` contain scripts for training and validation of the noise scaling and power balancing coefficients and extra scaling. See README files in these sub-dirs for details.
 
 ## License
 The project is licensed under the GNU general public license version 3.

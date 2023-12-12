@@ -173,12 +173,12 @@ class Sentinel1Image():
     def time_coverage_end(self):
         return datetime.strptime(os.path.basename(self.filename).split('_')[5], '%Y%m%dT%H%M%S')
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def shape(self, pol):
         a = self.xml.annotation[pol]
         return [int(a.find(i).text) for i in ['numberOfLines', 'numberOfSamples']]
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def swath_bounds(self, pol):
         """ Boundaries of blocks in each swath for each polarisation """
         names = {
@@ -196,7 +196,7 @@ class Sentinel1Image():
                     swath_bounds[swathMerge.swath.text][name].append(names[name](swathBounds.find(name).text))
         return swath_bounds
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def geolocation(self, pol):
         ''' Import geolocationGridPoint from annotation XML DOM '''
         geolocation_keys = {
@@ -225,14 +225,14 @@ class Sentinel1Image():
                     )
         return geolocation
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def geolocation_relative_azimuth_time(self, pol):
         az_time = list(map(parse_azimuth_time, self.geolocation(pol)['azimuthTime'].flat))
         az_time = [ (t-self.time_coverage_center).total_seconds() for t in az_time]
         az_time = np.array(az_time).reshape(self.geolocation(pol)['azimuthTime'].shape)
         return az_time
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def calibration(self, pol):
         calibration = defaultdict(list)
         for cv in self.xml.calibration[pol].find_all('calibrationVector'):
@@ -246,7 +246,7 @@ class Sentinel1Image():
             calibration[key] = np.array([list(map(float, p.split())) for p in calibration[key]])
         return calibration
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def aux_calibration_params(self):
         swaths = [f'{self.obsMode}{li}' for li in self.swath_ids]
         calibration_params = {
@@ -266,7 +266,7 @@ class Sentinel1Image():
                 calibration_params[pol][swath]['azimuthAntennaPattern'] = np.array([float(i) for i in calibrationParams.azimuthAntennaElementPattern.values.text.split()])
         return calibration_params
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def noise_range(self, pol):
         if self.IPFversion < 2.9:
             noiseRangeVectorName = 'noiseVector'
@@ -283,7 +283,7 @@ class Sentinel1Image():
         noise_range['line'] = np.array(noise_range['line'])
         return noise_range
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def noise_azimuth(self, pol):
         noise_azimuth = {f'{self.obsMode}{swid}':defaultdict(list) for swid in self.swath_ids}
         if self.IPFversion < 2.9:
@@ -997,7 +997,7 @@ class Sentinel1Image():
             sigma0 = fill_gaps(sigma0, sigma0 <= 0)
         return sigma0
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def antenna_pattern(self, pol):
         list_keys = ['slantRangeTime', 'elevationAngle', 'elevationPattern', 'incidenceAngle']
         antenna_pattern = {}
@@ -1019,7 +1019,7 @@ class Sentinel1Image():
                 antenna_pattern[swath]['roll'] = self.compute_roll(pol, antenna_pattern[swath])
         return antenna_pattern
 
-    @lru_cache
+    @lru_cache(maxsize=None)
     def import_orbit(self, pol):
         ''' Import orbit information from annotation XML DOM '''
         orbit = { 'time':[],
@@ -1241,7 +1241,7 @@ class Sentinel1Image():
             azimuthFmRate['azimuthFmRatePolynomial'].append(afmrp)
         return azimuthFmRate
     
-    @lru_cache
+    @lru_cache(maxsize=None)
     def focusedBurstLengthInTime(self, pol):
         ''' Get focused burst length in zero-Doppler time domain
 
@@ -1268,7 +1268,7 @@ class Sentinel1Image():
                 raise ValueError('number of bursts cannot be determined.')
         return focusedBurstLengthInTime
     
-    @lru_cache
+    @lru_cache(maxsize=None)
     def scalloping_gain(self, pol, subswathID):
         # azimuth antenna element patterns (AAEP) lookup table for given subswath
         gainAAEP = self.aux_calibration_params()[pol][subswathID]['azimuthAntennaPattern']

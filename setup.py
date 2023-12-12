@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='s1denoise',
-    version='1.4.1',
+    version='1.4.0',
     description='Thermal noise correction of Sentinel-1 TOPS GRDM EW products ',
     classifiers=[
         'Development Status :: 5 - Production/Stable',
