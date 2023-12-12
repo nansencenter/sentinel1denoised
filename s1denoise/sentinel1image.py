@@ -8,7 +8,7 @@ import requests
 import shutil
 import xml.etree.ElementTree as ET
 import zipfile
-from functools import cached_property, cache
+from functools import lru_cache
 
 import numpy as np
 from osgeo import gdal
@@ -46,36 +46,37 @@ class Sentinel1ImageXml:
         manifest_file = [f for f in s1.filenames if 'manifest.safe' in f][0]
 
         # find annotation, calibration and noise files
-        self.xml = dict(annotation = {}, calibration = {}, noise = {})
+        xml_names = ['annotation', 'calibration', 'noise']
+        self.__dict__.update({name : {} for name in xml_names})
         for pol in [self.txPol + 'H', self.txPol + 'V']:
-            self.xml['annotation'][pol] = [f for f in s1.filenames if ('annotation/s1' in f and pol.lower() in f)][0]
-            self.xml['calibration'][pol] = [f for f in s1.filenames if ('calibration-s1' in f and pol.lower() in f)][0]
-            self.xml['noise'][pol] = [f for f in s1.filenames if ('noise-s1' in f and pol.lower() in f)][0]
+            self.annotation[pol] = [f for f in s1.filenames if ('annotation/s1' in f and pol.lower() in f)][0]
+            self.calibration[pol] = [f for f in s1.filenames if ('calibration-s1' in f and pol.lower() in f)][0]
+            self.noise[pol] = [f for f in s1.filenames if ('noise-s1' in f and pol.lower() in f)][0]
 
         # read and parse XML files
         if zipfile.is_zipfile(s1.filename):
             with zipfile.PyZipFile(s1.filename) as zf:
-                for name in self.xml:
-                    for pol in self.xml[name]:
-                        self.xml[name][pol] = BeautifulSoup(zf.read(self.xml[name][pol]), features="xml")
-                self.xml['manifest'] = BeautifulSoup(zf.read(manifest_file), features="xml")
+                for name in xml_names:
+                    for pol in self.__dict__[name]:
+                        self.__dict__[name][pol] = BeautifulSoup(zf.read(self.__dict__[name][pol]), features="xml")
+                self.manifest = BeautifulSoup(zf.read(manifest_file), features="xml")
         else:
-            for name in self.xml:
-                for pol in self.xml[name]:
-                    with open(self.xml[name][pol]) as ff:
-                        self.xml[name][pol] = BeautifulSoup(ff.read(), features="xml")
+            for name in xml_names:
+                for pol in self.__dict__[name]:
+                    with open(self.__dict__[name][pol]) as ff:
+                        self.__dict__[name][pol] = BeautifulSoup(ff.read(), features="xml")
             with open(manifest_file) as ff:
-                self.xml['manifest'] = BeautifulSoup(ff.read(), features="xml")
+                self.manifest = BeautifulSoup(ff.read(), features="xml")
 
         # get the auxiliary calibration file
-        for resource in (self.xml['manifest'].find_all('resource') +
-                         self.xml['manifest'].find_all('safe:resource')):
+        for resource in (self.manifest.find_all('resource') +
+                         self.manifest.find_all('safe:resource')):
             if resource.attrs['role'] == 'AUX_CAL':
                 auxCalibFilename = resource.attrs['name'].split('/')[-1]
         self.set_aux_data_dir()
         self.download_aux_calibration(auxCalibFilename)
         with open(self.auxiliaryCalibration_file) as f:
-            self.xml['auxiliary'] = BeautifulSoup(f.read(), features="xml")
+            self.auxiliary = BeautifulSoup(f.read(), features="xml")
 
     def set_aux_data_dir(self):
         """ Set directory where aux calibration data is stored """
@@ -116,22 +117,6 @@ class Sentinel1ImageXml:
             # in case the physical_name of the downloaded file does not exactly match the filename from manifest
             # the best found AUX-CAL file is copied to the filename from manifest
             shutil.copytree(download_file.rstrip('.zip'), output_dir)
-
-    @property
-    def annotation(self):
-        return self.xml['annotation']
-    @property
-    def calibration(self):
-        return self.xml['calibration']
-    @property
-    def noise(self):
-        return self.xml['noise']
-    @property
-    def manifest(self):
-        return self.xml['manifest']
-    @property
-    def auxiliary(self):
-        return self.xml['auxiliary']
 
 
 class Sentinel1Image():
@@ -180,21 +165,21 @@ class Sentinel1Image():
         else:
             self.filenames = [str(i) for i in Path(f'{self.filename}/').rglob('*')]
 
-    @cached_property
+    @property
     def time_coverage_start(self):
         return datetime.strptime(os.path.basename(self.filename).split('_')[4], '%Y%m%dT%H%M%S')
 
-    @cached_property
+    @property
     def time_coverage_end(self):
         return datetime.strptime(os.path.basename(self.filename).split('_')[5], '%Y%m%dT%H%M%S')
 
-    @cached_property
-    def shape(self):
-        a = self.xml.annotation[self.pols[0]]
+    @lru_cache
+    def shape(self, pol):
+        a = self.xml.annotation[pol]
         return [int(a.find(i).text) for i in ['numberOfLines', 'numberOfSamples']]
 
-    @cached_property
-    def swath_bounds(self):
+    @lru_cache
+    def swath_bounds(self, pol):
         """ Boundaries of blocks in each swath for each polarisation """
         names = {
             'azimuthTime' : parse_azimuth_time,
@@ -204,17 +189,15 @@ class Sentinel1Image():
             'lastRangeSample' : int,
         }
         swath_bounds = {}
-        for pol in self.pols:
-            swath_bounds[pol] = {}
-            for swathMerge in self.xml.annotation[pol].find_all('swathMerge'):
-                swath_bounds[pol][swathMerge.swath.text] = defaultdict(list)
-                for swathBounds in swathMerge.find_all('swathBounds'):
-                    for name in names:
-                        swath_bounds[pol][swathMerge.swath.text][name].append(names[name](swathBounds.find(name).text))
+        for swathMerge in self.xml.annotation[pol].find_all('swathMerge'):
+            swath_bounds[swathMerge.swath.text] = defaultdict(list)
+            for swathBounds in swathMerge.find_all('swathBounds'):
+                for name in names:
+                    swath_bounds[swathMerge.swath.text][name].append(names[name](swathBounds.find(name).text))
         return swath_bounds
 
-    @cached_property
-    def geolocation(self):
+    @lru_cache
+    def geolocation(self, pol):
         ''' Import geolocationGridPoint from annotation XML DOM '''
         geolocation_keys = {
             'azimuthTime':   str, #lambda x : datetime.strptime(x, '%Y-%m-%dT%H:%M:%S.%f'),
@@ -227,49 +210,43 @@ class Sentinel1Image():
             'incidenceAngle':float,
             'elevationAngle':float,
         }
-        geolocation = {}
-        for pol in self.pols:
-            geolocation[pol] = defaultdict(list)
-            for p in self.xml.annotation[pol].find_all('geolocationGridPoint'):
-                for c in p:
-                    if c.name:
-                        geolocation[pol][c.name].append(geolocation_keys[c.name](c.text))
-            geolocation[pol]['line'] = np.unique(geolocation[pol]['line'])
-            geolocation[pol]['pixel'] = np.unique(geolocation[pol]['pixel'])
-            for i in geolocation[pol]:
-                if i not in ['line', 'pixel']:
-                    geolocation[pol][i] = np.array(geolocation[pol][i]).reshape(
-                        geolocation[pol]['line'].size,
-                        geolocation[pol]['pixel'].size
-                        )
+        geolocation = defaultdict(list)
+        for p in self.xml.annotation[pol].find_all('geolocationGridPoint'):
+            for c in p:
+                if c.name:
+                    geolocation[c.name].append(geolocation_keys[c.name](c.text))
+        geolocation['line'] = np.unique(geolocation['line'])
+        geolocation['pixel'] = np.unique(geolocation['pixel'])
+        for i in geolocation:
+            if i not in ['line', 'pixel']:
+                geolocation[i] = np.array(geolocation[i]).reshape(
+                    geolocation['line'].size,
+                    geolocation['pixel'].size
+                    )
         return geolocation
 
-    @cached_property
-    def geolocation_relative_azimuth_time(self):
-        az_time = {}
-        for pol in self.pols:
-            az_time[pol] = list(map(parse_azimuth_time, self.geolocation[pol]['azimuthTime'].flat))
-            az_time[pol] = [ (t-self.time_coverage_center).total_seconds() for t in az_time[pol]]
-            az_time[pol] = np.array(az_time[pol]).reshape(self.geolocation[pol]['azimuthTime'].shape)
+    @lru_cache
+    def geolocation_relative_azimuth_time(self, pol):
+        az_time = list(map(parse_azimuth_time, self.geolocation(pol)['azimuthTime'].flat))
+        az_time = [ (t-self.time_coverage_center).total_seconds() for t in az_time]
+        az_time = np.array(az_time).reshape(self.geolocation(pol)['azimuthTime'].shape)
         return az_time
 
-    @cached_property
-    def calibration(self):
-        calibration = {}
-        for pol in self.pols:
-            calibration[pol] = defaultdict(list)
-            for cv in self.xml.calibration[pol].find_all('calibrationVector'):
-                for n in cv:
-                    if n.name:
-                        calibration[pol][n.name].append(n.text)
-            calibration[pol]['azimuthTime'] = list(map(parse_azimuth_time, calibration[pol]['azimuthTime']))
-            calibration[pol]['line'] = np.array(list(map(int, calibration[pol]['line'])))
-            calibration[pol]['pixel'] = np.array([list(map(int, p.split())) for p in calibration[pol]['pixel']])
-            for key in ['sigmaNought', 'betaNought', 'gamma', 'dn']:
-                calibration[pol][key] = np.array([list(map(float, p.split())) for p in calibration[pol][key]])
+    @lru_cache
+    def calibration(self, pol):
+        calibration = defaultdict(list)
+        for cv in self.xml.calibration[pol].find_all('calibrationVector'):
+            for n in cv:
+                if n.name:
+                    calibration[n.name].append(n.text)
+        calibration['azimuthTime'] = list(map(parse_azimuth_time, calibration['azimuthTime']))
+        calibration['line'] = np.array(list(map(int, calibration['line'])))
+        calibration['pixel'] = np.array([list(map(int, p.split())) for p in calibration['pixel']])
+        for key in ['sigmaNought', 'betaNought', 'gamma', 'dn']:
+            calibration[key] = np.array([list(map(float, p.split())) for p in calibration[key]])
         return calibration
 
-    @cached_property
+    @lru_cache
     def aux_calibration_params(self):
         swaths = [f'{self.obsMode}{li}' for li in self.swath_ids]
         calibration_params = {
@@ -289,7 +266,7 @@ class Sentinel1Image():
                 calibration_params[pol][swath]['azimuthAntennaPattern'] = np.array([float(i) for i in calibrationParams.azimuthAntennaElementPattern.values.text.split()])
         return calibration_params
 
-    @cache
+    @lru_cache
     def noise_range(self, pol):
         if self.IPFversion < 2.9:
             noiseRangeVectorName = 'noiseVector'
@@ -306,7 +283,7 @@ class Sentinel1Image():
         noise_range['line'] = np.array(noise_range['line'])
         return noise_range
 
-    @cache
+    @lru_cache
     def noise_azimuth(self, pol):
         noise_azimuth = {f'{self.obsMode}{swid}':defaultdict(list) for swid in self.swath_ids}
         if self.IPFversion < 2.9:
@@ -314,9 +291,9 @@ class Sentinel1Image():
                 noise_azimuth[f'{self.obsMode}{swid}'] = dict(
                     firstAzimuthLine = [0],
                     firstRangeSample = [0],
-                    lastAzimuthLine = [self.shape[0]-1],
-                    lastRangeSample = [self.shape[1]-1],
-                    line = [np.array([0, self.shape[0]-1])],
+                    lastAzimuthLine = [self.shape(pol)[0]-1],
+                    lastRangeSample = [self.shape(pol)[1]-1],
+                    line = [np.array([0, self.shape(pol)[0]-1])],
                     noise = [np.array([1.0, 1.0])])
         else:
             int_names = ['firstAzimuthLine', 'firstRangeSample', 'lastAzimuthLine', 'lastRangeSample']
@@ -332,7 +309,7 @@ class Sentinel1Image():
         if pixel is None:
             pixel = self.noise_range(pol)['pixel']
         swath_indices = [np.zeros(p.shape, int) for p in pixel]
-        swathBounds = self.swath_bounds[pol]
+        swathBounds = self.swath_bounds(pol)
 
         for iswath, swath_name in enumerate(swathBounds):
             swathBound = swathBounds[swath_name]
@@ -419,7 +396,7 @@ class Sentinel1Image():
 
     def get_swath_interpolator(self, pol, swath_name, line, pixel, z):
         """ Prepare interpolators for one swath """
-        swathBound = self.swath_bounds[pol][swath_name]
+        swathBound = self.swath_bounds(pol)[swath_name]
         swath_coords = (
             swathBound['firstAzimuthLine'],
             swathBound['lastAzimuthLine'],
@@ -453,12 +430,12 @@ class Sentinel1Image():
     
     def geolocation_interpolator(self, pol, z):
         return RectBivariateSpline(
-                self.geolocation[pol]['line'],
-                self.geolocation[pol]['pixel'],
+                self.geolocation(pol)['line'],
+                self.geolocation(pol)['pixel'],
                 z)
 
     def get_angle_vectors(self, pol, angle_name):
-        z = self.geolocation[pol][angle_name]
+        z = self.geolocation(pol)[angle_name]
         i = self.geolocation_interpolator(pol, z)
         angle_vectors = [i(l, p).flatten() for (l, p) in zip(line, pixel)]
         return angle_vectors
@@ -467,9 +444,9 @@ class Sentinel1Image():
         line  = self.noise_range(pol)['line']
         pixel = self.noise_range(pol)['pixel']
         swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
-        s0line = self.calibration[pol]['line']
-        s0pixel = self.calibration[pol]['pixel']
-        sigma0 = self.calibration[pol][name]
+        s0line = self.calibration(pol)['line']
+        s0pixel = self.calibration(pol)['pixel']
+        sigma0 = self.calibration(pol)[name]
 
         sigma0_vecs = [np.zeros_like(p_vec) + np.nan for p_vec in pixel]
 
@@ -497,9 +474,9 @@ class Sentinel1Image():
         It computes EAP for input boresight angles
 
         """
-        eap_lut = self.aux_calibration_params[pol][subswathID]['elevationAntennaPattern']
-        recordLength = self.aux_calibration_params[pol][subswathID]['elevationAntennaPatternCount']
-        eai_lut = self.aux_calibration_params[pol][subswathID]['elevationAngleIncrement']
+        eap_lut = self.aux_calibration_params()[pol][subswathID]['elevationAntennaPattern']
+        recordLength = self.aux_calibration_params()[pol][subswathID]['elevationAntennaPatternCount']
+        eai_lut = self.aux_calibration_params()[pol][subswathID]['elevationAngleIncrement']
         if recordLength == eap_lut.shape[0]:
             # in case if elevationAntennaPattern is given in dB
             amplitudeLUT = 10**(eap_lut/10)
@@ -528,9 +505,9 @@ class Sentinel1Image():
         relativeAzimuthTime = np.hstack(relativeAzimuthTime)
         rollAngle = np.hstack(rollAngle)
         rollAngleIntp = InterpolatedUnivariateSpline(relativeAzimuthTime[sortIndex], rollAngle[sortIndex])
-        roll_map = rollAngleIntp(self.geolocation_relative_azimuth_time[pol])
+        roll_map = rollAngleIntp(self.geolocation_relative_azimuth_time(pol))
 
-        boresight_map = self.geolocation[pol]['elevationAngle'] - roll_map
+        boresight_map = self.geolocation(pol)['elevationAngle'] - roll_map
         boresight_angle_interpolator = self.geolocation_interpolator(pol, boresight_map)
         return boresight_angle_interpolator
 
@@ -540,7 +517,7 @@ class Sentinel1Image():
 
         """
         referenceRange = float(self.xml.annotation[pol].find('referenceRange').text)
-        rangeSpreadingLoss = (referenceRange / self.geolocation[pol]['slantRangeTime'] / SPEED_OF_LIGHT * 2)**rsl_power
+        rangeSpreadingLoss = (referenceRange / self.geolocation(pol)['slantRangeTime'] / SPEED_OF_LIGHT * 2)**rsl_power
         rsp_interpolator = self.geolocation_interpolator(pol, rangeSpreadingLoss)
         return rsp_interpolator
 
@@ -558,7 +535,7 @@ class Sentinel1Image():
         # noise lut shift
         for swid in self.swath_ids:
             swath_name = f'{self.obsMode}{swid}'
-            swathBound = self.swath_bounds[pol][swath_name]
+            swathBound = self.swath_bounds(pol)[swath_name]
             eap_interpolator = self.get_eap_interpolator(swath_name, pol)
             ba_interpolator = self.get_boresight_angle_interpolator(pol)
             rsp_interpolator = self.get_range_spread_loss_interpolator(pol, rsl_power=rsl_power)
@@ -606,7 +583,7 @@ class Sentinel1Image():
         ns, pb = self.import_denoisingCoefficients(pol)[:2]
         for swid in self.swath_ids:
             swath_name = f'{self.obsMode}{swid}'
-            swathBound = self.swath_bounds[pol][swath_name]
+            swathBound = self.swath_bounds(pol)[swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
                 swathBound['lastAzimuthLine'],
@@ -680,7 +657,7 @@ class Sentinel1Image():
         for swid in self.swath_ids[:-1]:
             q_subswath = []
             swath_name = f'{self.obsMode}{swid}'
-            swathBound = self.swath_bounds[pol][swath_name]
+            swathBound = self.swath_bounds(pol)[swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
                 swathBound['lastAzimuthLine'],
@@ -753,7 +730,7 @@ class Sentinel1Image():
         line = self.noise_range(pol)['line']
         sigma0 = self.get_raw_sigma0_vectors_from_full_size(
             pol, line, pixel, sigma0_fs, average_lines=average_lines)
-        return line, pixel, sigma0, nesz, crop, self.swath_bounds[pol]
+        return line, pixel, sigma0, nesz, crop, self.swath_bounds(pol)
 
     def experiment_noiseScaling(self, pol, average_lines=777, zoom_step=2):
         """ Compute noise scaling coefficients for each range noise line and save as NPZ """
@@ -910,7 +887,7 @@ class Sentinel1Image():
 
     def interp_nrv_full_size(self, z, line, pixel, pol, power=1):
         """ Interpolate noise range vectors to full size """
-        z_fs = np.zeros(self.shape) + np.nan
+        z_fs = np.zeros(self.shape(pol)) + np.nan
         swath_names = [f'{self.obsMode}{i}' for i in self.swath_ids]
         for swath_name in swath_names:
             z_interp2, swath_coords = self.get_swath_interpolator(pol, swath_name, line, pixel, z)
@@ -932,7 +909,7 @@ class Sentinel1Image():
             # skip correction id NS/PB coeffs are not available (e.g. HH or VV)
             if swath_name not in ns:
                 continue
-            swathBound = self.swath_bounds[pol][swath_name]
+            swathBound = self.swath_bounds(pol)[swath_name]
             zipped = zip(
                 swathBound['firstAzimuthLine'],
                 swathBound['lastAzimuthLine'],
@@ -951,9 +928,9 @@ class Sentinel1Image():
         dn = ds.ReadAsArray()
 
         sigma0_fs = dn.astype(float)**2 / self.interp_nrv_full_size(
-            self.calibration[pol]['sigmaNought'],
-            self.calibration[pol]['line'],
-            self.calibration[pol]['pixel'],
+            self.calibration(pol)['sigmaNought'],
+            self.calibration(pol)['line'],
+            self.calibration(pol)['pixel'],
             pol, power=2)
         sigma0_fs[dn <= min_dn] = np.nan
         return sigma0_fs
@@ -1020,7 +997,7 @@ class Sentinel1Image():
             sigma0 = fill_gaps(sigma0, sigma0 <= 0)
         return sigma0
 
-    @cache
+    @lru_cache
     def antenna_pattern(self, pol):
         list_keys = ['slantRangeTime', 'elevationAngle', 'elevationPattern', 'incidenceAngle']
         antenna_pattern = {}
@@ -1042,7 +1019,7 @@ class Sentinel1Image():
                 antenna_pattern[swath]['roll'] = self.compute_roll(pol, antenna_pattern[swath])
         return antenna_pattern
 
-    @cache
+    @lru_cache
     def import_orbit(self, pol):
         ''' Import orbit information from annotation XML DOM '''
         orbit = { 'time':[],
@@ -1204,9 +1181,9 @@ class Sentinel1Image():
 
     def subswathIndexMap(self, pol):
         ''' Convert subswath indices into full grid pixels '''
-        subswathIndexMap = np.zeros(self.shape, dtype=np.uint8)
+        subswathIndexMap = np.zeros(self.shape(pol), dtype=np.uint8)
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
-            swathBound = self.swath_bounds[pol]['%s%s' % (self.obsMode, iSW)]
+            swathBound = self.swath_bounds(pol)['%s%s' % (self.obsMode, iSW)]
             zipped = zip(swathBound['firstAzimuthLine'],
                          swathBound['firstRangeSample'],
                          swathBound['lastAzimuthLine'],
@@ -1217,7 +1194,7 @@ class Sentinel1Image():
     
     def subswathCenterSampleIndex(self, pol):
         ''' Range center pixel indices along azimuth for each subswath '''
-        swathBounds = self.swath_bounds[pol]
+        swathBounds = self.swath_bounds(pol)
         subswathCenterSampleIndex = {}
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             subswathID = '%s%s' % (self.obsMode, iSW)
@@ -1264,7 +1241,7 @@ class Sentinel1Image():
             azimuthFmRate['azimuthFmRatePolynomial'].append(afmrp)
         return azimuthFmRate
     
-    @cache
+    @lru_cache
     def focusedBurstLengthInTime(self, pol):
         ''' Get focused burst length in zero-Doppler time domain
 
@@ -1291,20 +1268,20 @@ class Sentinel1Image():
                 raise ValueError('number of bursts cannot be determined.')
         return focusedBurstLengthInTime
     
-    @cache
+    @lru_cache
     def scalloping_gain(self, pol, subswathID):
         # azimuth antenna element patterns (AAEP) lookup table for given subswath
-        gainAAEP = self.aux_calibration_params[pol][subswathID]['azimuthAntennaPattern']
-        azimuthAngleIncrement = self.aux_calibration_params[pol][subswathID]['azimuthAngleIncrement']
+        gainAAEP = self.aux_calibration_params()[pol][subswathID]['azimuthAntennaPattern']
+        azimuthAngleIncrement = self.aux_calibration_params()[pol][subswathID]['azimuthAngleIncrement']
         angleAAEP = np.arange(-(len(gainAAEP)//2), len(gainAAEP)//2+1) * azimuthAngleIncrement
         # subswath range center pixel index
         subswathCenterSampleIndex = self.subswathCenterSampleIndex(pol)[subswathID]
         # slant range time along subswath range center
-        interpolator = self.geolocation_interpolator(pol, self.geolocation[pol]['slantRangeTime'])
-        slantRangeTime = np.squeeze(interpolator(np.arange(self.shape[0]), subswathCenterSampleIndex))
+        interpolator = self.geolocation_interpolator(pol, self.geolocation(pol)['slantRangeTime'])
+        slantRangeTime = np.squeeze(interpolator(np.arange(self.shape(pol)[0]), subswathCenterSampleIndex))
         # relative azimuth time along subswath range center
-        interpolator = self.geolocation_interpolator(pol, self.geolocation_relative_azimuth_time[pol])
-        azimuthTime = np.squeeze(interpolator(np.arange(self.shape[0]), subswathCenterSampleIndex))
+        interpolator = self.geolocation_interpolator(pol, self.geolocation_relative_azimuth_time(pol))
+        azimuthTime = np.squeeze(interpolator(np.arange(self.shape(pol)[0]), subswathCenterSampleIndex))
         # Doppler rate induced by satellite motion
         motionDopplerRate = self.azimuthFmRateAtGivenTime(pol, azimuthTime, slantRangeTime)
         # antenna steering rate
@@ -1386,7 +1363,7 @@ class Sentinel1Image():
 
     def get_scalloping_full_size(self, pol):
         """ Interpolate noise azimuth vector to full resolution for all blocks """
-        scall_fs = np.zeros(self.shape)
+        scall_fs = np.zeros(self.shape(pol))
         if self.IPFversion < 2.9:
             subswathIndexMap = self.subswathIndexMap(pol)
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
@@ -1395,7 +1372,7 @@ class Sentinel1Image():
                 # assign computed scalloping gain into each subswath
                 valid = (subswathIndexMap==iSW)
                 scall_fs[valid] = (
-                    scallopingGain[:, np.newaxis] * np.ones((1,self.shape[1])))[valid]
+                    scallopingGain[:, np.newaxis] * np.ones((1,self.shape(pol)[1])))[valid]
             return scall_fs
             
         noiseAzimuthVector = self.noise_azimuth(pol)
@@ -1422,7 +1399,7 @@ class Sentinel1Image():
         return scall_fs
 
     def get_geolocation_full_size(self, pol, name):
-        i = self.geolocation_interpolator(pol, self.geolocation[pol][name])
-        rows = np.arange(self.shape[0])
-        cols = np.arange(self.shape[1])
+        i = self.geolocation_interpolator(pol, self.geolocation(pol)[name])
+        rows = np.arange(self.shape(pol)[0])
+        cols = np.arange(self.shape(pol)[1])
         return i(rows, cols)
