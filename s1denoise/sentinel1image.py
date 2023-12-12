@@ -662,35 +662,15 @@ class Sentinel1Image():
                     raw_sigma0[i][gpi] = s0_gpi
         return raw_sigma0
 
-    def get_lons_vectors_from_full_size(self, line, pixel, lons_fs):
-        """ Read lons from input GeoTIff for given lines and for given pixels
+    def get_vectors_from_full_size(self, line, pixel, array):
+        """ Read array from input GeoTIff for given lines and for given pixels
             from full size longitude matrix
 
         """
-        lons_res = [np.zeros(p.size)+np.nan for p in pixel]
+        array_vecs = [np.zeros(p.size)+np.nan for p in pixel]
         for i in range(line.shape[0]):
-            lons_res[i] = lons_fs[line[i]][pixel[i]]
-        return lons_res
-
-    def get_lats_vectors_from_full_size(self, line, pixel, lats_fs):
-        """ Read lats from input GeoTIff for given lines and for given pixels
-            from full size latitude matrix
-
-        """
-        lats_res = [np.zeros(p.size)+np.nan for p in pixel]
-        for i in range(line.shape[0]):
-            lats_res[i] = lats_fs[line[i]][pixel[i]]
-        return lats_res
-
-    def get_ia_vectors_from_full_size(self, line, pixel, ia_fs):
-        """ Read incidence angle values from input GeoTIff for given lines and for given pixels
-            from full size incidence angle matrix
-
-        """
-        ia_res = [np.zeros(p.size)+np.nan for p in pixel]
-        for i in range(line.shape[0]):
-            ia_res[i] = ia_fs[line[i]][pixel[i]]
-        return ia_res
+            array_vecs[i] = array[line[i]][pixel[i]]
+        return array_vecs
 
     def compute_rqm(self, s0, pol, num_px=100, **kwargs):
         """ Compute Range Quality Metric from the input sigma0 """
@@ -1440,3 +1420,9 @@ class Sentinel1Image():
                 z_arr = np.repeat([z_vec_fr], (lrs-frs+1), axis=0).T
                 scall_fs[fal:lal+1, frs:lrs+1] = z_arr
         return scall_fs
+
+    def get_geolocation_full_size(self, pol, name):
+        i = self.geolocation_interpolator(pol, self.geolocation[pol][name])
+        rows = np.arange(self.shape[0])
+        cols = np.arange(self.shape[1])
+        return i(rows, cols)
