@@ -35,8 +35,8 @@ def run_correction(ifile,
 
     Returns
     --------
-    s1 : Nansat
-        object with corrected bands and metadata
+    d : dict{np.array}
+        dictionary with numpy array with corrected sigma0 in dB for both polarisations
 
     """
     scale = {

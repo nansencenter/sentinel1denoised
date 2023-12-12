@@ -49,7 +49,8 @@ Do processing inside Python environment:
 ```python
 from s1denoise import Sentinel1Image
 # open access to file with S1 data
-s1 = Sentinel1Image('/path/to/data/S1B_EW_GRDM_1SDH_INPUTFILE.zip')
+input_file = '/path/to/data/S1B_EW_GRDM_1SDH_INPUTFILE.zip'
+s1 = Sentinel1Image(input_file)
 
 # run thermal noise correction in HV polarisation with the default ESA algorithm
 s0hve = s1.remove_thermal_noise('HV', algorithm='ESA')
@@ -62,6 +63,10 @@ s0_hv = s1.remove_thermal_noise('HV', algorithm='NERSC_TG')
 
 # run thermal and texture noise correction in HV polarisation
 s0_hv = s1.remove_texture_noise('HV')
+
+# High level function for processing both polarisations
+from s1denoise.tools import run_correction
+d = run_correction(input_file)
 
 ```
 

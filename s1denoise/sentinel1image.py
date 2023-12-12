@@ -86,6 +86,7 @@ class Sentinel1ImageXml:
             os.makedirs(self.aux_data_dir)
 
     def download_aux_calibration(self, filename):
+        """ Download AUX calibration file from APC """
         self.auxiliaryCalibration_file = os.path.join(self.aux_data_dir, filename, 'data', '%s-aux-cal.xml' % self.platform.lower())
         if os.path.exists(self.auxiliaryCalibration_file):
             return
@@ -120,7 +121,18 @@ class Sentinel1ImageXml:
 
 
 class Sentinel1Image():
-    """ Thermal noise correction for S1 GRD data"""
+    """ Thermal noise correction for S1 GRD data
+
+    Input
+    -----
+    filename : str
+        filename of the Sentinel-1 GRD file (SAFE or ZIP format)
+
+    Returns
+    -------
+    s1 : Sentinel1Image
+        Object to perform noise correction
+    """
     def __init__(self, filename):
         self.filename = filename
         self.find_filesnames()
@@ -157,6 +169,7 @@ class Sentinel1Image():
                   'ESA default noise correction result might be wrong.\n')
 
     def find_filesnames(self):
+        """ Find all filenames in subdirecotries """
         self.is_zipfile = False
         if zipfile.is_zipfile(self.filename):
             self.is_zipfile = True
@@ -175,6 +188,7 @@ class Sentinel1Image():
 
     @lru_cache(maxsize=None)
     def shape(self, pol):
+        """ Shape of the raster for input polarization """
         a = self.xml.annotation[pol]
         return [int(a.find(i).text) for i in ['numberOfLines', 'numberOfSamples']]
 
@@ -198,7 +212,7 @@ class Sentinel1Image():
 
     @lru_cache(maxsize=None)
     def geolocation(self, pol):
-        ''' Import geolocationGridPoint from annotation XML DOM '''
+        ''' Import geolocationGridPoint from annotation XML '''
         geolocation_keys = {
             'azimuthTime':   str, #lambda x : datetime.strptime(x, '%Y-%m-%dT%H:%M:%S.%f'),
             'slantRangeTime':float,
@@ -227,6 +241,7 @@ class Sentinel1Image():
 
     @lru_cache(maxsize=None)
     def geolocation_relative_azimuth_time(self, pol):
+        """ Matrix with relative azimuth time (AT) computed as second difference of AT from central AT """
         az_time = list(map(parse_azimuth_time, self.geolocation(pol)['azimuthTime'].flat))
         az_time = [ (t-self.time_coverage_center).total_seconds() for t in az_time]
         az_time = np.array(az_time).reshape(self.geolocation(pol)['azimuthTime'].shape)
@@ -234,6 +249,7 @@ class Sentinel1Image():
 
     @lru_cache(maxsize=None)
     def calibration(self, pol):
+        """ Import calibrationVector from calibration XML """
         calibration = defaultdict(list)
         for cv in self.xml.calibration[pol].find_all('calibrationVector'):
             for n in cv:
@@ -248,11 +264,9 @@ class Sentinel1Image():
 
     @lru_cache(maxsize=None)
     def aux_calibration_params(self):
+        """ Import calibrationParams from AUX calibration XML """
         swaths = [f'{self.obsMode}{li}' for li in self.swath_ids]
-        calibration_params = {
-            'HH': {swath: {} for swath in swaths},
-            'HV': {swath: {} for swath in swaths}
-        }
+        calibration_params = {pol : {swath: {} for swath in swaths} for pol in self.pols}
         for calibrationParams in self.xml.auxiliary.find_all('calibrationParams'):
             swath = calibrationParams.swath.text
             pol = calibrationParams.polarisation.text
@@ -268,6 +282,7 @@ class Sentinel1Image():
 
     @lru_cache(maxsize=None)
     def noise_range(self, pol):
+        """ Read range noise vectors from noise XML """
         if self.IPFversion < 2.9:
             noiseRangeVectorName = 'noiseVector'
             noiseLutName = 'noiseLut'
@@ -285,6 +300,7 @@ class Sentinel1Image():
 
     @lru_cache(maxsize=None)
     def noise_azimuth(self, pol):
+        """ Read azimuth noise vectors from noise XML """
         noise_azimuth = {f'{self.obsMode}{swid}':defaultdict(list) for swid in self.swath_ids}
         if self.IPFversion < 2.9:
             for swid in self.swath_ids:
@@ -306,6 +322,7 @@ class Sentinel1Image():
         return noise_azimuth
 
     def get_swath_id_vectors(self, pol, pixel=None):
+        """ Create vectors with IDs of swaths for each range noise vector """
         if pixel is None:
             pixel = self.noise_range(pol)['pixel']
         swath_indices = [np.zeros(p.shape, int) for p in pixel]
@@ -353,6 +370,7 @@ class Sentinel1Image():
         return eap_vectors, rsl_vectors
 
     def get_pg_product(self, pol, pg_name='pgProductAmplitude'):
+        """ Read PG-product from annotation XML """
         azimuth_time = [(t - self.time_coverage_center).total_seconds()
                         for t in self.noise_range(pol)['azimuthTime']]
         pg = defaultdict(dict)
@@ -384,6 +402,7 @@ class Sentinel1Image():
         return tg_vectors
 
     def get_tg_scales_offsets(self):
+        """ Read scales and offsets of PG-based noise vectors from denosing_parameters.json """
         params = self.load_denoising_parameters_json()
         tg_id = f'{os.path.basename(self.filename)[:16]}_APG_{self.IPFversion:04.2f}'
         p = params[tg_id]
@@ -429,18 +448,24 @@ class Sentinel1Image():
         return z_interp2, swath_coords
     
     def geolocation_interpolator(self, pol, z):
+        """ Interpolator of data from geolocation XML """
         return RectBivariateSpline(
                 self.geolocation(pol)['line'],
                 self.geolocation(pol)['pixel'],
                 z)
 
     def get_angle_vectors(self, pol, angle_name):
+        """ Get vectors of angles from geolocations for pixels of range noise vectors """
         z = self.geolocation(pol)[angle_name]
         i = self.geolocation_interpolator(pol, z)
-        angle_vectors = [i(l, p).flatten() for (l, p) in zip(line, pixel)]
+        angle_vectors = [
+            i(l, p).flatten() for (l, p) in
+            zip(self.noise_range(pol)['line'], self.noise_range(pol)['pixel'])
+            ]
         return angle_vectors
 
     def get_calibration_vectors(self, pol, name='sigmaNought'):
+        """ Get calibration constant for pixels of range noise vectors """
         line  = self.noise_range(pol)['line']
         pixel = self.noise_range(pol)['pixel']
         swath_names = ['%s%s' % (self.obsMode, iSW) for iSW in self.swath_ids]
@@ -621,6 +646,7 @@ class Sentinel1Image():
         return raw_sigma0
 
     def get_raw_sigma0_vectors_from_full_size(self, line, pixel, swath_ids, sigma0_fs, wsy=20, wsx=5, avg_func=np.nanmean):
+        """ Get values of sigma0 from input array on the pixels of noise range vectors. Averaging in range and azimuth. """
         raw_sigma0 = [np.zeros(p.size)+np.nan for p in pixel]
         for i in range(line.shape[0]):
             y0 = max(0, line[i]-wsy)
@@ -952,6 +978,7 @@ class Sentinel1Image():
         return crosspol_noise_file
 
     def get_noise_tg_vectors(self, pol):
+        """ Compute noise using total gain vectors and precomputed scales and offsets """
         pixel = self.noise_range(pol)['pixel']
         noise = [np.zeros_like(i) for i in pixel]
         scales, offsets = self.get_tg_scales_offsets()
@@ -964,6 +991,7 @@ class Sentinel1Image():
         return noise
 
     def get_nesz_full_size(self, pol, algorithm):
+        """ Create matrix of NESZ in full resolution for entire scene """
         # ESA noise vectors
         noise = self.noise_range(pol)['noise']
         if algorithm == 'NERSC':
@@ -989,6 +1017,7 @@ class Sentinel1Image():
         return nesz_fs
 
     def remove_thermal_noise(self, pol, algorithm='NERSC', remove_negative=True, min_dn=0):
+        """ Get calibrated sigma0 and subtract NESZ """
         nesz_fs = self.get_nesz_full_size(pol, algorithm)
         sigma0 = self.get_raw_sigma0_full_size(pol, min_dn=min_dn)
         sigma0 -= nesz_fs
@@ -999,6 +1028,7 @@ class Sentinel1Image():
 
     @lru_cache(maxsize=None)
     def antenna_pattern(self, pol):
+        """ Read antennaPattern from annotation XML """
         list_keys = ['slantRangeTime', 'elevationAngle', 'elevationPattern', 'incidenceAngle']
         antenna_pattern = {}
         antennaPatternList = self.xml.annotation[pol].find('antennaPatternList')
@@ -1052,6 +1082,7 @@ class Sentinel1Image():
         return orbitAtGivenTime
 
     def compute_roll(self, pol, antenna_pattern):
+        """ Compute roll angle from antenna_pattern """
         relativeAzimuthTime = np.array([
             (t - self.time_coverage_center).total_seconds()
             for t in antenna_pattern['azimuthTime']
@@ -1070,6 +1101,7 @@ class Sentinel1Image():
         return rollAngle
 
     def load_denoising_parameters_json(self):
+        """ Load scale and offset for NERSC algorithm from JSON file """
         denoise_filename = os.path.join(
             os.path.dirname(os.path.realpath(__file__)),
             'denoising_parameters.json')
@@ -1146,7 +1178,7 @@ class Sentinel1Image():
         Parameters
         ----------
         pol : str
-            'HH' or 'HV'
+            'HH' or 'HV' or 'or 'VV' 'VH'
         window : int
             Size of window in the gaussian filter
         weight : float
@@ -1270,6 +1302,7 @@ class Sentinel1Image():
     
     @lru_cache(maxsize=None)
     def scalloping_gain(self, pol, subswathID):
+        """ Compute scalloping gain for old data """
         # azimuth antenna element patterns (AAEP) lookup table for given subswath
         gainAAEP = self.aux_calibration_params()[pol][subswathID]['azimuthAntennaPattern']
         azimuthAngleIncrement = self.aux_calibration_params()[pol][subswathID]['azimuthAngleIncrement']
@@ -1399,6 +1432,7 @@ class Sentinel1Image():
         return scall_fs
 
     def get_geolocation_full_size(self, pol, name):
+        """ Get geolocation array with full resolution for the entire scene """
         i = self.geolocation_interpolator(pol, self.geolocation(pol)[name])
         rows = np.arange(self.shape(pol)[0])
         cols = np.arange(self.shape(pol)[1])
