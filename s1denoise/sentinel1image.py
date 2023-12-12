@@ -10,7 +10,6 @@ import xml.etree.ElementTree as ET
 import zipfile
 from functools import cached_property, cache
 
-from nansat import Nansat
 import numpy as np
 from osgeo import gdal
 from bs4 import BeautifulSoup
@@ -40,28 +39,22 @@ ANTENNA_STEERING_RATE = { 'IW1': 1.590368784,
                           'EW5': 2.122855427 }    # degrees per second. Available from AUX_INS
 
 class Sentinel1ImageXml:
-    def __init__(self, filename):
-        self.txPol = filename.split(os.sep)[-1][15]    # H or V
-        self.platform = filename.split(os.sep)[-1][:3]    # S1A or S1B
-
-        # get list of all filenames
-        if zipfile.is_zipfile(filename):
-            with zipfile.PyZipFile(filename) as zf:
-                filenames = zf.namelist()
-        else:
-            filenames = [str(i) for i in Path(f'{filename}/').rglob('*')]
-        manifest_file = [f for f in filenames if 'manifest.safe' in f][0]
+    def __init__(self, s1):
+        ''' Read calibration/annotation XML files and auxiliary XML file '''        
+        self.txPol = s1.filename.split(os.sep)[-1][15]    # H or V
+        self.platform = s1.filename.split(os.sep)[-1][:3]    # S1A or S1B
+        manifest_file = [f for f in s1.filenames if 'manifest.safe' in f][0]
 
         # find annotation, calibration and noise files
         self.xml = dict(annotation = {}, calibration = {}, noise = {})
         for pol in [self.txPol + 'H', self.txPol + 'V']:
-            self.xml['annotation'][pol] = [f for f in filenames if ('annotation/s1' in f and pol.lower() in f)][0]
-            self.xml['calibration'][pol] = [f for f in filenames if ('calibration-s1' in f and pol.lower() in f)][0]
-            self.xml['noise'][pol] = [f for f in filenames if ('noise-s1' in f and pol.lower() in f)][0]
+            self.xml['annotation'][pol] = [f for f in s1.filenames if ('annotation/s1' in f and pol.lower() in f)][0]
+            self.xml['calibration'][pol] = [f for f in s1.filenames if ('calibration-s1' in f and pol.lower() in f)][0]
+            self.xml['noise'][pol] = [f for f in s1.filenames if ('noise-s1' in f and pol.lower() in f)][0]
 
         # read and parse XML files
-        if zipfile.is_zipfile(filename):
-            with zipfile.PyZipFile(filename) as zf:
+        if zipfile.is_zipfile(s1.filename):
+            with zipfile.PyZipFile(s1.filename) as zf:
                 for name in self.xml:
                     for pol in self.xml[name]:
                         self.xml[name][pol] = BeautifulSoup(zf.read(self.xml[name][pol]), features="xml")
@@ -141,12 +134,17 @@ class Sentinel1ImageXml:
         return self.xml['auxiliary']
 
 
-class Sentinel1Image(Nansat):
-    """ Cal/Val routines for Sentinel-1 performed on range noise vector coordinatess"""
+class Sentinel1Image():
+    """ Thermal noise correction for S1 GRD data"""
+    def __init__(self, filename):
+        self.filename = filename
+        self.find_filesnames()
+        # get list of measurements
+        self.measurements = {os.path.basename(f).split('-')[3].upper() : f for f in self.filenames if 'measurement/s1' in f}
+        if self.is_zipfile:
+            for pol in self.measurements:
+                self.measurements[pol] = f'/vsizip/{filename}/{self.measurements[pol]}'
 
-    def __init__(self, filename, mapper='sentinel1_l1', log_level=30, fast=False):
-        ''' Read calibration/annotation XML files and auxiliary XML file '''
-        Nansat.__init__(self, filename, mapper=mapper, log_level=log_level, fast=fast)
         if ( self.filename.split(os.sep)[-1][4:16]
              not in [ 'IW_GRDH_1SDH',
                       'IW_GRDH_1SDV',
@@ -162,7 +160,7 @@ class Sentinel1Image(Nansat):
         # scene center time will be used as the reference for relative azimuth time in seconds
         self.time_coverage_center = ( self.time_coverage_start + timedelta(
             seconds=(self.time_coverage_end - self.time_coverage_start).total_seconds()/2) )
-        self.xml = Sentinel1ImageXml(self.filename)
+        self.xml = Sentinel1ImageXml(self)
         # get processor version of Sentinel-1 IPF (Instrument Processing Facility)
         self.IPFversion = float(self.xml.manifest.find('safe:software').attrs['version'])
         if self.IPFversion < 2.43:
@@ -172,6 +170,28 @@ class Sentinel1Image(Nansat):
         elif 2.43 <= self.IPFversion < 2.53:
             print('\nWARNING: IPF version of input image is lower than 2.53! '
                   'ESA default noise correction result might be wrong.\n')
+
+    def find_filesnames(self):
+        self.is_zipfile = False
+        if zipfile.is_zipfile(self.filename):
+            self.is_zipfile = True
+            with zipfile.PyZipFile(self.filename) as zf:
+                self.filenames = zf.namelist()
+        else:
+            self.filenames = [str(i) for i in Path(f'{self.filename}/').rglob('*')]
+
+    @cached_property
+    def time_coverage_start(self):
+        return datetime.strptime(os.path.basename(self.filename).split('_')[4], '%Y%m%dT%H%M%S')
+
+    @cached_property
+    def time_coverage_end(self):
+        return datetime.strptime(os.path.basename(self.filename).split('_')[5], '%Y%m%dT%H%M%S')
+
+    @cached_property
+    def shape(self):
+        a = self.xml.annotation[self.pols[0]]
+        return [int(a.find(i).text) for i in ['numberOfLines', 'numberOfSamples']]
 
     @cached_property
     def swath_bounds(self):
@@ -294,9 +314,9 @@ class Sentinel1Image(Nansat):
                 noise_azimuth[f'{self.obsMode}{swid}'] = dict(
                     firstAzimuthLine = [0],
                     firstRangeSample = [0],
-                    lastAzimuthLine = [self.shape()[0]-1],
-                    lastRangeSample = [self.shape()[1]-1],
-                    line = [np.array([0, self.shape()[0]-1])],
+                    lastAzimuthLine = [self.shape[0]-1],
+                    lastRangeSample = [self.shape[1]-1],
+                    line = [np.array([0, self.shape[0]-1])],
                     noise = [np.array([1.0, 1.0])])
         else:
             int_names = ['firstAzimuthLine', 'firstRangeSample', 'lastAzimuthLine', 'lastRangeSample']
@@ -431,22 +451,17 @@ class Sentinel1Image(Nansat):
         z_interp2 = RectBivariateSpline(swath_lines, pix_vec_fr, np.array(z_vecs))
         return z_interp2, swath_coords
     
-    def get_elevation_incidence_angle_interpolators(self, p):
-        return (
-            RectBivariateSpline(
-                self.geolocation[p]['line'],
-                self.geolocation[p]['pixel'],
-                self.geolocation[p]['elevationAngle']), 
-            RectBivariateSpline(
-                self.geolocation[p]['line'],
-                self.geolocation[p]['pixel'],
-                self.geolocation[p]['incidenceAngle'])
-            )
+    def geolocation_interpolator(self, pol, z):
+        return RectBivariateSpline(
+                self.geolocation[pol]['line'],
+                self.geolocation[pol]['pixel'],
+                z)
 
-    def get_elevation_incidence_angle_vectors(self, ea_interpolator, ia_interpolator, line, pixel):
-        ea = [ea_interpolator(l, p).flatten() for (l, p) in zip(line, pixel)]
-        ia = [ia_interpolator(l, p).flatten() for (l, p) in zip(line, pixel)]
-        return ea, ia
+    def get_angle_vectors(self, pol, angle_name):
+        z = self.geolocation[pol][angle_name]
+        i = self.geolocation_interpolator(pol, z)
+        angle_vectors = [i(l, p).flatten() for (l, p) in zip(line, pixel)]
+        return angle_vectors
 
     def get_calibration_vectors(self, pol, name='sigmaNought'):
         line  = self.noise_range(pol)['line']
@@ -516,8 +531,7 @@ class Sentinel1Image(Nansat):
         roll_map = rollAngleIntp(self.geolocation_relative_azimuth_time[pol])
 
         boresight_map = self.geolocation[pol]['elevationAngle'] - roll_map
-        boresight_angle_interpolator = RectBivariateSpline(
-            self.geolocation[pol]['line'], self.geolocation[pol]['pixel'], boresight_map)
+        boresight_angle_interpolator = self.geolocation_interpolator(pol, boresight_map)
         return boresight_angle_interpolator
 
     def get_range_spread_loss_interpolator(self, pol, rsl_power=3./2.):
@@ -527,8 +541,7 @@ class Sentinel1Image(Nansat):
         """
         referenceRange = float(self.xml.annotation[pol].find('referenceRange').text)
         rangeSpreadingLoss = (referenceRange / self.geolocation[pol]['slantRangeTime'] / SPEED_OF_LIGHT * 2)**rsl_power
-        rsp_interpolator = RectBivariateSpline(
-            self.geolocation[pol]['line'], self.geolocation[pol]['pixel'], rangeSpreadingLoss)
+        rsp_interpolator = self.geolocation_interpolator(pol, rangeSpreadingLoss)
         return rsp_interpolator
 
     def get_shifted_noise_vectors(self, pol, pixel=None, noise=None, skip=4, min_valid_size=10, rsl_power=3./2.):
@@ -917,11 +930,10 @@ class Sentinel1Image(Nansat):
 
     def interp_nrv_full_size(self, z, line, pixel, pol, power=1):
         """ Interpolate noise range vectors to full size """
-        z_fs = np.zeros(self.shape()) + np.nan
+        z_fs = np.zeros(self.shape) + np.nan
         swath_names = [f'{self.obsMode}{i}' for i in self.swath_ids]
         for swath_name in swath_names:
-            z_interp2, swath_coords = self.get_swath_interpolator(
-                pol, swath_name, line, pixel, z)
+            z_interp2, swath_coords = self.get_swath_interpolator(pol, swath_name, line, pixel, z)
             for fal, lal, frs, lrs in zip(*swath_coords):
                 pix_vec_fr = np.arange(frs, lrs+1)
                 lin_vec_fr = np.arange(fal, lal+1)
@@ -954,7 +966,7 @@ class Sentinel1Image(Nansat):
 
     def get_raw_sigma0_full_size(self, pol, min_dn=0):
         """ Read DN from input GeoTiff file and calibrate """
-        src_filename = self.bands()[self.get_band_number(f'DN_{pol}')]['SourceFilename']
+        src_filename = self.measurements[pol]
         ds = gdal.Open(src_filename)
         dn = ds.ReadAsArray()
 
@@ -1212,7 +1224,7 @@ class Sentinel1Image(Nansat):
 
     def subswathIndexMap(self, pol):
         ''' Convert subswath indices into full grid pixels '''
-        subswathIndexMap = np.zeros(self.shape(), dtype=np.uint8)
+        subswathIndexMap = np.zeros(self.shape, dtype=np.uint8)
         for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
             swathBound = self.swath_bounds[pol]['%s%s' % (self.obsMode, iSW)]
             zipped = zip(swathBound['firstAzimuthLine'],
@@ -1236,16 +1248,6 @@ class Sentinel1Image(Nansat):
             subswathCenterSampleIndex[subswathID] = int(round(
                 np.sum(midPixelIndices * numberOfLines) / np.sum(numberOfLines) ))
         return subswathCenterSampleIndex
-    
-    def geolocationGridPointInterpolator(self, pol, itemName):
-        ''' Generate interpolator for items in geolocation grid point list '''
-        if itemName == 'azimuthTime':
-            z = self.geolocation_relative_azimuth_time[pol]
-        else:
-            z = self.geolocation[pol][itemName]
-        interpolator = RectBivariateSpline(
-            self.geolocation[pol]['line'], self.geolocation[pol]['pixel'], z)
-        return interpolator
     
     def azimuthFmRateAtGivenTime(self, pol, relativeAzimuthTime, slantRangeTime):
         ''' Get azimuth frequency modulation rate for given time vectors
@@ -1318,11 +1320,11 @@ class Sentinel1Image(Nansat):
         # subswath range center pixel index
         subswathCenterSampleIndex = self.subswathCenterSampleIndex(pol)[subswathID]
         # slant range time along subswath range center
-        interpolator = self.geolocationGridPointInterpolator(pol, 'slantRangeTime')
-        slantRangeTime = np.squeeze(interpolator(np.arange(self.shape()[0]), subswathCenterSampleIndex))
+        interpolator = self.geolocation_interpolator(pol, self.geolocation[pol]['slantRangeTime'])
+        slantRangeTime = np.squeeze(interpolator(np.arange(self.shape[0]), subswathCenterSampleIndex))
         # relative azimuth time along subswath range center
-        interpolator = self.geolocationGridPointInterpolator(pol, 'azimuthTime')
-        azimuthTime = np.squeeze(interpolator(np.arange(self.shape()[0]), subswathCenterSampleIndex))
+        interpolator = self.geolocation_interpolator(pol, self.geolocation_relative_azimuth_time[pol])
+        azimuthTime = np.squeeze(interpolator(np.arange(self.shape[0]), subswathCenterSampleIndex))
         # Doppler rate induced by satellite motion
         motionDopplerRate = self.azimuthFmRateAtGivenTime(pol, azimuthTime, slantRangeTime)
         # antenna steering rate
@@ -1404,7 +1406,7 @@ class Sentinel1Image(Nansat):
 
     def get_scalloping_full_size(self, pol):
         """ Interpolate noise azimuth vector to full resolution for all blocks """
-        scall_fs = np.zeros(self.shape())
+        scall_fs = np.zeros(self.shape)
         if self.IPFversion < 2.9:
             subswathIndexMap = self.subswathIndexMap(pol)
             for iSW in range(1, {'IW':3, 'EW':5}[self.obsMode]+1):
@@ -1413,7 +1415,7 @@ class Sentinel1Image(Nansat):
                 # assign computed scalloping gain into each subswath
                 valid = (subswathIndexMap==iSW)
                 scall_fs[valid] = (
-                    scallopingGain[:, np.newaxis] * np.ones((1,self.shape()[1])))[valid]
+                    scallopingGain[:, np.newaxis] * np.ones((1,self.shape[1])))[valid]
             return scall_fs
             
         noiseAzimuthVector = self.noise_azimuth(pol)

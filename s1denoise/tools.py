@@ -5,7 +5,6 @@ import glob
 import json
 import os
 
-from nansat import Nansat
 import numpy as np
 
 from s1denoise import Sentinel1Image

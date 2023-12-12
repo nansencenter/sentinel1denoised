@@ -28,6 +28,7 @@ setup(
     install_requires=[
         'nansat',
         'scipy',
+        'beautifulsoup4',
     ],
     include_package_data=True,
     zip_safe=False)
