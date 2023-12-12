@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='s1denoise',
-    version='1.3.2',
+    version='1.4.0',
     description='Thermal noise correction of Sentinel-1 TOPS GRDM EW products ',
     classifiers=[
         'Development Status :: 5 - Production/Stable',
@@ -11,8 +11,7 @@ setup(
         'Intended Audience :: Science/Research',
         'Natural Language :: English',
         'Operating System :: OS Independent',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3',
         'Topic :: Scientific/Engineering',
         'Topic :: Scientific/Engineering :: Information Analysis',
         'Topic :: Utilities'
@@ -26,7 +25,11 @@ setup(
         ],
     package_data={'s1denoise' :['denoising_parameters.json']},
     install_requires=[
-        'nansat',
+        'beautifulsoup4',
+        'gdal',
+        'lxml',
+        'numpy',
+        'requests',
         'scipy',
     ],
     include_package_data=True,

@@ -5,7 +5,6 @@ import glob
 import json
 import os
 
-from nansat import Nansat
 import numpy as np
 
 from s1denoise import Sentinel1Image
@@ -14,7 +13,8 @@ def run_correction(ifile,
     angular_scale_copol=-0.2,
     angular_scale_crpol=-0.025,
     angular_offset=34.5,
-    output_dtype=np.float32,
+    algorithm='NERSC',
+    dtype=np.float32,
     **kwargs):
     """ Run thermal, textural and angular correction of input Sentinel-1 file
 
@@ -28,15 +28,15 @@ def run_correction(ifile,
         Scale for angular correction of sigma0 in HV or VH
     angular_offset : float
         Central angle for sigma0 normalization
-    output_dtype : dtype
-        Type of output array
+    dtype : np.dtype
+        Output datatype
     **kwargs : dict
         dummy keyword args for Sentinel1Image.remove_texture_noise()
 
     Returns
     --------
-    s1 : Nansat
-        object with corrected bands and metadata
+    d : dict{np.array}
+        dictionary with numpy array with corrected sigma0 in dB for both polarisations
 
     """
     scale = {
@@ -47,18 +47,13 @@ def run_correction(ifile,
     }
 
     s1 = Sentinel1Image(ifile)
-    n = Nansat.from_domain(s1)
-    inc = s1['incidence_angle']
+    d = {}
     for pol in s1.pols:
         print('Correct %s band' % pol)
-        parameters = s1.get_metadata(band_id='sigma0_%s' % pol)
-        for i in ['dataType', 'PixelFunctionType', 'SourceBand', 'SourceFilename']:
-            parameters.pop(i)
-        array = s1.remove_texture_noise(pol, **kwargs)
-        array = 10 * np.log10(array) - scale[pol] * (inc - angular_offset)
-        n.add_band(array=array.astype(output_dtype), parameters=parameters)
-    n.set_metadata(s1.get_metadata())
-    return n
+        inc = s1.get_geolocation_full_size(pol, 'incidenceAngle')
+        d[pol] = s1.remove_texture_noise(pol, algorithm=algorithm, **kwargs)
+        d[pol] = (10 * np.log10(d[pol]) - scale[pol] * (inc - angular_offset)).astype(dtype)
+    return d
 
 
 class AnalyzeExperiment():

@@ -1,0 +1,9 @@
+name: s1denoise
+dependencies:
+  - gdal
+  - lxml
+  - pip
+  - pip:
+    - beautifulsoup4
+    - requests
+

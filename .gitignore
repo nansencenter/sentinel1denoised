@@ -66,3 +66,4 @@ target/
 .DS_Store
 
 fit_on_one
+*png
