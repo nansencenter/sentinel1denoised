@@ -142,13 +142,11 @@ class Sentinel1Image():
             for pol in self.measurements:
                 self.measurements[pol] = f'/vsizip/{filename}/{self.measurements[pol]}'
 
-        if ( self.filename.split(os.sep)[-1][4:16]
-             not in [ 'IW_GRDH_1SDH',
-                      'IW_GRDH_1SDV',
-                      'EW_GRDM_1SDH',
-                      'EW_GRDM_1SDV'  ] ):
-             raise ValueError( 'Source file must be Sentinel-1A/1B '
-                 'IW_GRDH_1SDH, IW_GRDH_1SDV, EW_GRDM_1SDH, or EW_GRDM_1SDV product.' )
+        if (os.path.basename(self.filename)[4:16] not in [
+            'IW_GRDH_1SDH', 'IW_GRDH_1SDV', 'EW_GRDM_1SDH', 'EW_GRDM_1SDV']):
+            raise ValueError(
+                'Source file must be Sentinel-1A/1B '
+                'IW_GRDH_1SDH, IW_GRDH_1SDV, EW_GRDM_1SDH, or EW_GRDM_1SDV product.')
         self.obsMode = self.filename.split(os.sep)[-1][4:6]    # IW or EW
         pol_mode = os.path.basename(self.filename).split('_')[3]
         self.crosspol = {'1SDH': 'HV', '1SDV': 'VH'}[pol_mode]
