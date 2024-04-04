@@ -27,7 +27,7 @@ def parse_args(args):
     parser.add_argument('-m', '--mask', help='Also export land mask as a numpy file', action='store_true')
     return parser.parse_args(args)
 
-def export_geotiff(ifile, ofile, d, mask):
+def export_geotiff(ifile, ofile, d):
     """ Use Nansat to export the arrays as a geotiff file with georeference as in the input dataset """
     remove_metadata = ['dataType', 'PixelFunctionType', 'SourceBand', 'SourceFilename', 'colormap', 'minmax', 'units', 'wkv']
     n_inp = Nansat(ifile)
@@ -49,12 +49,12 @@ def export_mask(ifile, ofile):
 if __name__ == '__main__':
     args = parse_args(sys.argv[1:])
     if (args.geotiff or args.mask) and not NANSAT_AVAILABLE:
-        raise ImportError(' Nansat is not installed and I can\'t export geotif or landmask. '
+        raise ImportError(' Nansat is not installed and I can\'t export geotiff or landmask. '
                           ' Install Nansat or do not use "-g" and "-m". ')
 
     d = run_correction(args.ifile, algorithm=args.algorithm)
     if args.geotiff:
-        export_geotiff(args.ifile, args.ofile, d, args.mask)
+        export_geotiff(args.ifile, args.ofile, d)
     else:
         np.savez_compressed(args.ofile, **d)
     if args.mask:
