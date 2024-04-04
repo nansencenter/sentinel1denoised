@@ -1421,7 +1421,7 @@ class Sentinel1Image():
                 nav['noise'],
             )
             for fal, lal, frs, lrs, y, z in zipped:
-                if isinstance(y, (list, np.ndarray)):
+                if isinstance(y, (list, np.ndarray)) and len(y) > 1:
                     nav_interp = InterpolatedUnivariateSpline(y, z, k=1)
                 else:
                     nav_interp = lambda x: z
